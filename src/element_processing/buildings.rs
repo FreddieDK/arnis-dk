@@ -2358,7 +2358,9 @@ pub fn generate_buildings(
     }
 
     let cached_footprint_size = cached_floor_area.len();
-    if cached_footprint_size == 0 {
+    if cached_footprint_size < 16 {
+        // Skip structures smaller than ~4x4 blocks — these are typically
+        // utility structures (sheds, pump houses) that look out of place
         return;
     }
 

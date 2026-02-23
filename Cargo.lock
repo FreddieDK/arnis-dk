@@ -213,6 +213,7 @@ dependencies = [
  "tauri-plugin-log",
  "tauri-plugin-shell",
  "tempfile",
+ "tiff",
  "tokio",
  "vek",
  "windows 0.62.2",

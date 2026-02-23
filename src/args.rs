@@ -62,6 +62,25 @@ pub struct Args {
     #[arg(long, default_value_t = true)]
     pub city_boundaries: bool,
 
+    /// Enable BBR (Bygnings- og Boligregistret) enrichment for Danish buildings.
+    /// Fetches building metadata (floors, wall material, roof material, use) from
+    /// the Danish national building register and injects missing tags into OSM data.
+    #[arg(long)]
+    pub bbr: bool,
+
+    /// Datafordeler API key for BBR GraphQL access.
+    /// Create one at https://datafordeler.dk under your IT-system.
+    /// Can also be set via the BBR_CREDENTIALS environment variable.
+    #[arg(long, env = "BBR_CREDENTIALS")]
+    pub bbr_credentials: Option<String>,
+
+    /// Dataforsyningen token for DHM (Danmarks Højdemodel) high-res terrain.
+    /// Create one at https://dataforsyningen.dk under your profile.
+    /// Provides 0.4m resolution terrain instead of the default AWS tiles.
+    /// Can also be set via the DHM_TOKEN environment variable.
+    #[arg(long, env = "DHM_TOKEN")]
+    pub dhm_token: Option<String>,
+
     /// Enable debug mode (optional)
     #[arg(long)]
     pub debug: bool,

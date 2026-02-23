@@ -1,0 +1,27 @@
+name: Build Linux Binary
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@v1
+      with:
+        toolchain: stable
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: Build CLI-only release binary
+      run: cargo build --release --no-default-features
+
+    - name: Upload binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: arnis-linux-x86_64
+        path: target/release/arnis

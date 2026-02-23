@@ -33,6 +33,10 @@ pub struct ElevationData {
     pub(crate) width: usize,
     /// Height of the elevation grid
     pub(crate) height: usize,
+    /// Minecraft Y coordinate corresponding to real-world sea level (0m elevation).
+    /// When set, areas at or below this level should be filled with water.
+    /// Only set by DHM (high-res Danish terrain) which has accurate absolute elevation.
+    pub(crate) sea_level_y: Option<i32>,
 }
 
 /// RGB image buffer type for elevation tiles
@@ -544,6 +548,7 @@ pub fn fetch_elevation_data(
         heights: mc_heights,
         width: grid_width,
         height: grid_height,
+        sea_level_y: None,
     })
 }
 

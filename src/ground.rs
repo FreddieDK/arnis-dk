@@ -48,6 +48,11 @@ impl Ground {
         }
     }
 
+    /// Returns the Minecraft Y for sea level, if known (DHM terrain only).
+    pub fn sea_level_y(&self) -> Option<i32> {
+        self.elevation_data.as_ref().and_then(|d| d.sea_level_y)
+    }
+
     /// Returns the ground level at the given coordinates
     #[inline(always)]
     pub fn level(&self, coord: XZPoint) -> i32 {
@@ -148,6 +153,35 @@ pub fn generate_ground_data(args: &Args) -> Ground {
     if args.terrain {
         println!("{} Fetching elevation...", "[3/7]".bold());
         emit_gui_progress_update(14.0, "Fetching elevation...");
+
+        // Try DHM (high-res Danish terrain) first if token is available
+        if let Some(ref token) = args.dhm_token {
+            match crate::bbr::fetch_dhm_elevation(
+                &args.bbox,
+                args.scale,
+                args.ground_level,
+                token,
+            ) {
+                Ok(elevation_data) => {
+                    let ground = Ground {
+                        elevation_enabled: true,
+                        ground_level: args.ground_level,
+                        elevation_data: Some(elevation_data),
+                    };
+                    if args.debug {
+                        ground.save_debug_image("elevation_debug");
+                    }
+                    return ground;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "{} DHM terrain failed: {e}. Falling back to default elevation.",
+                        "Warning:".yellow().bold()
+                    );
+                }
+            }
+        }
+
         let ground = Ground::new_enabled(&args.bbox, args.scale, args.ground_level);
         if args.debug {
             ground.save_debug_image("elevation_debug");

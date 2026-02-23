@@ -1,5 +1,5 @@
 use crate::args::Args;
-use crate::block_definitions::{BEDROCK, DIRT, GRASS_BLOCK, SMOOTH_STONE, STONE};
+use crate::block_definitions::{BEDROCK, DIRT, GRASS_BLOCK, SMOOTH_STONE, STONE, WATER};
 use crate::coordinate_system::cartesian::XZBBox;
 use crate::coordinate_system::geographic::LLBBox;
 use crate::element_processing::*;
@@ -167,6 +167,16 @@ pub fn generate_world_with_options(
                         &flood_fill_cache,
                         &building_footprints,
                     );
+                } else if way
+                    .tags
+                    .get("natural")
+                    .map(|v| v == "water" || v == "bay")
+                    .unwrap_or(false)
+                    || way.tags.contains_key("water")
+                {
+                    // Water ways use scanline rasterization (same as water relations)
+                    // instead of the flood-fill approach, which fails on concave polygons
+                    water_areas::generate_water_area_from_way(&mut editor, way, &xzbbox);
                 } else if way.tags.contains_key("natural") {
                     natural::generate_natural(
                         &mut editor,
@@ -352,6 +362,7 @@ pub fn generate_world_with_options(
 
     // Check if terrain elevation is enabled; when disabled, we can skip ground level lookups entirely
     let terrain_enabled = ground.elevation_enabled;
+    let sea_level_y = ground.sea_level_y();
 
     // Process ground generation chunk-by-chunk for better cache locality.
     // This keeps the same region/chunk HashMap entries hot in CPU cache,
@@ -393,6 +404,25 @@ pub fn generate_world_with_options(
                         }
                         editor.set_block_if_absent_absolute(DIRT, x, ground_y - 1, z);
                         editor.set_block_if_absent_absolute(DIRT, x, ground_y - 2, z);
+                    }
+
+                    // Fill water for areas at or below sea level (DHM terrain)
+                    if let Some(sly) = sea_level_y {
+                        if ground_y < sly {
+                            // Fill water from ground surface up to sea level
+                            for wy in (ground_y + 1)..=sly {
+                                editor.set_block_if_absent_absolute(WATER, x, wy, z);
+                            }
+                            // Place sand at the bottom instead of grass/stone
+                            editor.set_block_absolute(
+                                crate::block_definitions::SAND,
+                                x,
+                                ground_y,
+                                z,
+                                None,
+                                None,
+                            );
+                        }
                     }
 
                     // Fill underground with stone
