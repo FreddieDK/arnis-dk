@@ -1,10 +1,6 @@
-<img src="assets/git/banner.png" width="100%" alt="Banner">
-
 # Arnis DK
 
 A fork of [Arnis](https://github.com/louis-e/arnis) with Denmark-specific enhancements. Generates Minecraft Java Edition (1.17+) and Bedrock Edition worlds from real-world geography, enriched with Danish government data sources for higher-fidelity buildings and terrain.
-
-![Minecraft Preview](assets/git/preview.jpg)
 
 ## What's different from upstream Arnis?
 
@@ -29,12 +25,6 @@ Uses **DHM (Danmarks Højdemodel)** from Dataforsyningen — Denmark's national 
 - **DHM request retry logic**: Automatic retries with backoff for elevation data requests
 
 ## Usage
-
-### GUI
-Download the [latest release](https://github.com/louis-e/arnis/releases/) or compile with:
-```
-cargo run
-```
 
 ### CLI (basic)
 ```
@@ -88,7 +78,7 @@ A GitHub Actions workflow is included to build a headless Linux binary:
 
 ## Disclaimer
 
-This fork was developed with the assistance of AI (Claude).
+This fork was developed with the assistance of AI 
 
 Building and terrain data from [Datafordeler](https://datafordeler.dk) (BBR) and [Dataforsyningen](https://dataforsyningen.dk) (DHM) is provided by the Danish government. If you use this data, you must credit the respective data sources in accordance with their terms of use.
 
