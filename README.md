@@ -66,6 +66,26 @@ A GitHub Actions workflow is included to build a headless Linux binary:
 2. Download the `arnis-linux-x86_64` artifact
 3. Upload to your server, `chmod +x arnis`, and run
 
+## CLI flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--bbox` | *required* | Bounding box: `min_lat,min_lng,max_lat,max_lng` |
+| `--output-dir` | *required (Java)* | Directory where the world is created |
+| `--bedrock` | `false` | Generate Bedrock Edition (.mcworld) instead of Java |
+| `--terrain` | `false` | Enable terrain elevation |
+| `--scale` | `1.0` | World scale in blocks per meter |
+| `--ground-level` | `-62` | Base ground level Y coordinate |
+| `--interior` | `true` | Generate building interiors |
+| `--roof` | `true` | Generate building roofs |
+| `--fillground` | `false` | Fill ground with stone below surface |
+| `--city-boundaries` | `true` | Detect urban areas for stone ground |
+| `--bbr` | `false` | Enable BBR building enrichment (Denmark) |
+| `--bbr-credentials` | — | Datafordeler API key for BBR |
+| `--dhm-token` | — | Dataforsyningen token for DHM terrain |
+| `--debug` | `false` | Enable debug output |
+| `--timeout` | — | Flood fill timeout in seconds |
+
 ## Disclaimer
 
 This fork was developed with the assistance of AI (Claude).
