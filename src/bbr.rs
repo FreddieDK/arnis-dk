@@ -105,27 +105,26 @@ fn wgs84_to_utm32n(lat: f64, lon: f64) -> (f64, f64) {
     let e2_3 = e2_2 * e2;
     let m = a
         * ((1.0 - e2 / 4.0 - 3.0 * e2_2 / 64.0 - 5.0 * e2_3 / 256.0) * lat_rad
-            - (3.0 * e2 / 8.0 + 3.0 * e2_2 / 32.0 + 45.0 * e2_3 / 1024.0)
-                * (2.0 * lat_rad).sin()
+            - (3.0 * e2 / 8.0 + 3.0 * e2_2 / 32.0 + 45.0 * e2_3 / 1024.0) * (2.0 * lat_rad).sin()
             + (15.0 * e2_2 / 256.0 + 45.0 * e2_3 / 1024.0) * (4.0 * lat_rad).sin()
             - (35.0 * e2_3 / 3072.0) * (6.0 * lat_rad).sin());
 
-    let easting = k0 * n
+    let easting = k0
+        * n
         * (a_coeff
             + (1.0 - t * t + c) * a_coeff.powi(3) / 6.0
-            + (5.0 - 18.0 * t * t + t.powi(4) + 72.0 * c - 58.0 * e_prime2)
-                * a_coeff.powi(5)
+            + (5.0 - 18.0 * t * t + t.powi(4) + 72.0 * c - 58.0 * e_prime2) * a_coeff.powi(5)
                 / 120.0)
         + 500000.0;
 
     let northing = k0
-        * (m
-            + n * t
-                * (a_coeff.powi(2) / 2.0
-                    + (5.0 - t * t + 9.0 * c + 4.0 * c * c) * a_coeff.powi(4) / 24.0
-                    + (61.0 - 58.0 * t * t + t.powi(4) + 600.0 * c - 330.0 * e_prime2)
-                        * a_coeff.powi(6)
-                        / 720.0));
+        * (m + n
+            * t
+            * (a_coeff.powi(2) / 2.0
+                + (5.0 - t * t + 9.0 * c + 4.0 * c * c) * a_coeff.powi(4) / 24.0
+                + (61.0 - 58.0 * t * t + t.powi(4) + 600.0 * c - 330.0 * e_prime2)
+                    * a_coeff.powi(6)
+                    / 720.0));
 
     (easting, northing)
 }
@@ -162,17 +161,16 @@ fn utm32n_to_wgs84(easting: f64, northing: f64) -> (f64, f64) {
     let lat = phi1
         - (n1 * t1 / r1)
             * (d * d / 2.0
-                - (5.0 + 3.0 * t1 * t1 + 10.0 * c1 - 4.0 * c1 * c1 - 9.0 * e_prime2)
-                    * d.powi(4)
+                - (5.0 + 3.0 * t1 * t1 + 10.0 * c1 - 4.0 * c1 * c1 - 9.0 * e_prime2) * d.powi(4)
                     / 24.0
-                + (61.0 + 90.0 * t1 * t1 + 298.0 * c1 + 45.0 * t1.powi(4) - 252.0 * e_prime2
+                + (61.0 + 90.0 * t1 * t1 + 298.0 * c1 + 45.0 * t1.powi(4)
+                    - 252.0 * e_prime2
                     - 3.0 * c1 * c1)
                     * d.powi(6)
                     / 720.0);
 
     let lon = (d - (1.0 + 2.0 * t1 * t1 + c1) * d.powi(3) / 6.0
-        + (5.0 - 2.0 * c1 + 28.0 * t1 * t1 - 3.0 * c1 * c1 + 8.0 * e_prime2
-            + 24.0 * t1.powi(4))
+        + (5.0 - 2.0 * c1 + 28.0 * t1 * t1 - 3.0 * c1 * c1 + 8.0 * e_prime2 + 24.0 * t1.powi(4))
             * d.powi(5)
             / 120.0)
         / phi1.cos();
@@ -203,16 +201,37 @@ fn build_bbr_query(bbox: LLBBox, cursor: Option<&str>) -> String {
         let mut y = 1970i32;
         let mut remaining = days as i32;
         loop {
-            let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 366 } else { 365 };
-            if remaining < days_in_year { break; }
+            let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
+                366
+            } else {
+                365
+            };
+            if remaining < days_in_year {
+                break;
+            }
             remaining -= days_in_year;
             y += 1;
         }
         let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
-        let mdays = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        let mdays = [
+            31,
+            if leap { 29 } else { 28 },
+            31,
+            30,
+            31,
+            30,
+            31,
+            31,
+            30,
+            31,
+            30,
+            31,
+        ];
         let mut m = 0u32;
         for &md in &mdays {
-            if remaining < md { break; }
+            if remaining < md {
+                break;
+            }
             remaining -= md;
             m += 1;
         }
@@ -286,10 +305,7 @@ fn fetch_bbr_buildings(
         if !resp.status().is_success() {
             let status = resp.status();
             let body_text = resp.text().unwrap_or_default();
-            return Err(format!(
-                "BBR GraphQL API returned status {status}: {body_text}"
-            )
-            .into());
+            return Err(format!("BBR GraphQL API returned status {status}: {body_text}").into());
         }
 
         let body: GraphQlResponse = resp.json()?;
@@ -322,14 +338,8 @@ fn fetch_bbr_buildings(
                     .ydervaegs_materiale
                     .as_ref()
                     .and_then(|s| s.parse().ok()),
-                tagdaekning: bygning
-                    .tagdaekning
-                    .as_ref()
-                    .and_then(|s| s.parse().ok()),
-                anvendelse: bygning
-                    .anvendelse
-                    .as_ref()
-                    .and_then(|s| s.parse().ok()),
+                tagdaekning: bygning.tagdaekning.as_ref().and_then(|s| s.parse().ok()),
+                anvendelse: bygning.anvendelse.as_ref().and_then(|s| s.parse().ok()),
             });
         }
 
@@ -385,17 +395,17 @@ fn parse_point_coordinate(coord_str: &str) -> Option<(f64, f64)> {
 /// Uses hex codes for accuracy since the renderer supports them via color_text_to_rgb_tuple.
 fn bbr_wall_material_to_colour(code: i32) -> Option<&'static str> {
     match code {
-        1 => Some("#b5451b"),    // Mursten (brick) - Danish red/brown brick
-        2 => Some("#c8c0b8"),    // Letbeton (lightweight concrete) - light warm gray
-        3 => Some("#b0b0b0"),    // Fibercement (fiber cement) - neutral gray
-        4 => Some("#c8a050"),    // Bindingsværk (timber frame) - ochre/yellow
-        5 => Some("#a07040"),    // Træ (wood) - warm brown
-        6 => Some("#909090"),    // Beton (concrete) - medium gray
-        7 => Some("#d8c8a0"),    // Natursten (natural stone) - sandstone
-        8 => Some("#808890"),    // Metal - cool gray
-        10 => Some("#d0e8f0"),   // Glas (glass) - light blue tint
-        11 => Some("#e8e0d0"),   // Kalksandsten (calcium silicate) - off-white
-        12 => Some("#f0e8d0"),   // Puds (stucco/render) - cream/off-white
+        1 => Some("#b5451b"),  // Mursten (brick) - Danish red/brown brick
+        2 => Some("#c8c0b8"),  // Letbeton (lightweight concrete) - light warm gray
+        3 => Some("#b0b0b0"),  // Fibercement (fiber cement) - neutral gray
+        4 => Some("#c8a050"),  // Bindingsværk (timber frame) - ochre/yellow
+        5 => Some("#a07040"),  // Træ (wood) - warm brown
+        6 => Some("#909090"),  // Beton (concrete) - medium gray
+        7 => Some("#d8c8a0"),  // Natursten (natural stone) - sandstone
+        8 => Some("#808890"),  // Metal - cool gray
+        10 => Some("#d0e8f0"), // Glas (glass) - light blue tint
+        11 => Some("#e8e0d0"), // Kalksandsten (calcium silicate) - off-white
+        12 => Some("#f0e8d0"), // Puds (stucco/render) - cream/off-white
         _ => None,
     }
 }
@@ -476,36 +486,36 @@ fn bbr_anvendelse_to_building_type(code: i32) -> Option<&'static str> {
         310..=319 => Some("commercial"),
         320..=329 => Some("office"),
         330..=339 => Some("hotel"),
-        340..=349 => Some("commercial"),   // Restaurant etc
+        340..=349 => Some("commercial"), // Restaurant etc
         350..=359 => Some("retail"),
-        360..=369 => Some("commercial"),   // Shopping/commercial
+        360..=369 => Some("commercial"), // Shopping/commercial
         370..=379 => Some("commercial"),
         390..=399 => Some("commercial"),
         // Industrial
-        410..=419 => Some("industrial"),   // Factory/manufacturing
-        420..=429 => Some("industrial"),   // Workshop
-        430..=439 => Some("warehouse"),    // Warehouse/storage
+        410..=419 => Some("industrial"), // Factory/manufacturing
+        420..=429 => Some("industrial"), // Workshop
+        430..=439 => Some("warehouse"),  // Warehouse/storage
         440..=449 => Some("industrial"),
         // Public / institutional
-        510..=519 => Some("school"),       // Grundskole (primary school)
-        520..=529 => Some("university"),   // Videregående uddannelse
+        510..=519 => Some("school"),     // Grundskole (primary school)
+        520..=529 => Some("university"), // Videregående uddannelse
         530..=539 => Some("hospital"),
-        540..=549 => Some("public"),       // Daycare
+        540..=549 => Some("public"), // Daycare
         550..=559 => Some("school"),
-        585 => Some("church"),             // Kirke (church)
+        585 => Some("church"), // Kirke (church)
         590..=599 => Some("public"),
         // Culture / sports
-        610..=619 => Some("public"),       // Cultural
-        620..=629 => Some("public"),       // Library, museum
+        610..=619 => Some("public"), // Cultural
+        620..=629 => Some("public"), // Library, museum
         // Infrastructure
-        710..=719 => Some("industrial"),   // Energy/utility
-        720..=729 => Some("industrial"),   // Water/sewage
+        710..=719 => Some("industrial"), // Energy/utility
+        720..=729 => Some("industrial"), // Water/sewage
         // Agricultural
         910..=919 => Some("farm"),
         920..=929 => Some("farm_auxiliary"),
-        930 => Some("shed"),               // Udhus (outbuilding)
-        940 => Some("garage"),             // Garage
-        950 => Some("shed"),               // Anneks (annexe)
+        930 => Some("shed"),   // Udhus (outbuilding)
+        940 => Some("garage"), // Garage
+        950 => Some("shed"),   // Anneks (annexe)
         _ => None,
     }
 }
@@ -662,9 +672,7 @@ pub fn enrich_with_bbr(
         }
     }
 
-    println!(
-        "BBR enrichment: matched {matched} buildings, enriched {enriched} with new tags."
-    );
+    println!("BBR enrichment: matched {matched} buildings, enriched {enriched} with new tags.");
 
     Ok(())
 }
@@ -673,8 +681,8 @@ pub fn enrich_with_bbr(
 // DHM (Danmarks Højdemodel) high-resolution terrain
 // ============================================================================
 
-use crate::elevation_data::ElevationData;
 use crate::coordinate_system::transformation::geo_distance;
+use crate::elevation_data::ElevationData;
 
 /// Fetch high-resolution elevation data from DHM via Dataforsyningen WCS.
 /// Returns an ElevationData grid matching the Minecraft world dimensions.
@@ -740,7 +748,11 @@ pub fn fetch_dhm_elevation(
                     let delay = Duration::from_secs(2u64.pow(attempt as u32 - 1));
                     println!(
                         "DHM request round {}/{} attempt {}/{} (retrying in {}s)...",
-                        round, max_rounds, attempt, quick_retries, delay.as_secs()
+                        round,
+                        max_rounds,
+                        attempt,
+                        quick_retries,
+                        delay.as_secs()
                     );
                     std::thread::sleep(delay);
                 }
@@ -800,7 +812,10 @@ pub fn fetch_dhm_elevation(
         return Err(format!("DHM WCS returned error: {text}").into());
     }
 
-    println!("Received {} bytes of DHM terrain data. Parsing...", bytes.len());
+    println!(
+        "Received {} bytes of DHM terrain data. Parsing...",
+        bytes.len()
+    );
     emit_gui_progress_update(15.0, "Processing DHM terrain...");
 
     // Parse the GeoTIFF using the tiff crate
@@ -808,29 +823,21 @@ pub fn fetch_dhm_elevation(
     let mut decoder = tiff::decoder::Decoder::new(cursor)
         .map_err(|e| format!("Failed to decode GeoTIFF: {e}"))?;
 
-    let (tiff_width, tiff_height) = decoder.dimensions()
+    let (tiff_width, tiff_height) = decoder
+        .dimensions()
         .map_err(|e| format!("Failed to read TIFF dimensions: {e}"))?;
 
     // Read elevation values
-    let image_data = decoder.read_image()
+    let image_data = decoder
+        .read_image()
         .map_err(|e| format!("Failed to read TIFF image data: {e}"))?;
 
     let raw_heights: Vec<f64> = match image_data {
-        tiff::decoder::DecodingResult::F32(data) => {
-            data.iter().map(|&v| v as f64).collect()
-        }
-        tiff::decoder::DecodingResult::F64(data) => {
-            data.to_vec()
-        }
-        tiff::decoder::DecodingResult::U8(data) => {
-            data.iter().map(|&v| v as f64).collect()
-        }
-        tiff::decoder::DecodingResult::U16(data) => {
-            data.iter().map(|&v| v as f64).collect()
-        }
-        tiff::decoder::DecodingResult::I16(data) => {
-            data.iter().map(|&v| v as f64).collect()
-        }
+        tiff::decoder::DecodingResult::F32(data) => data.iter().map(|&v| v as f64).collect(),
+        tiff::decoder::DecodingResult::F64(data) => data.to_vec(),
+        tiff::decoder::DecodingResult::U8(data) => data.iter().map(|&v| v as f64).collect(),
+        tiff::decoder::DecodingResult::U16(data) => data.iter().map(|&v| v as f64).collect(),
+        tiff::decoder::DecodingResult::I16(data) => data.iter().map(|&v| v as f64).collect(),
         _ => {
             return Err("Unsupported TIFF pixel format".into());
         }
@@ -854,7 +861,11 @@ pub fn fetch_dhm_elevation(
             let tz = tz.min(tiff_height as usize - 1);
 
             let idx = tz * tiff_width as usize + tx;
-            let h = if idx < raw_heights.len() { raw_heights[idx] } else { 0.0 };
+            let h = if idx < raw_heights.len() {
+                raw_heights[idx]
+            } else {
+                0.0
+            };
 
             // Replace nodata with 0 (sea level)
             height_grid[gz][gx] = if h <= nodata { 0.0 } else { h };
@@ -902,8 +913,10 @@ pub fn fetch_dhm_elevation(
     let sea_level_y = if height_range > 0.0 && min_h < 0.5 {
         let sea_relative = (0.0 - min_h) / height_range;
         let sea_scaled = sea_relative * scaled_range;
-        Some(((ground_level as f64 + sea_scaled).round() as i32)
-            .clamp(ground_level, MAX_Y - TERRAIN_HEIGHT_BUFFER))
+        Some(
+            ((ground_level as f64 + sea_scaled).round() as i32)
+                .clamp(ground_level, MAX_Y - TERRAIN_HEIGHT_BUFFER),
+        )
     } else {
         None // No sea-level areas in this bbox
     };
@@ -977,8 +990,8 @@ fn dhm_gaussian_blur(grid: &[Vec<f64>], sigma: f64) -> Vec<Vec<f64>> {
         for x in 0..w {
             let mut acc = 0.0;
             for k in 0..kernel_size {
-                let sx = (x as isize + k as isize - radius as isize)
-                    .clamp(0, w as isize - 1) as usize;
+                let sx =
+                    (x as isize + k as isize - radius as isize).clamp(0, w as isize - 1) as usize;
                 acc += grid[y][sx] * kernel[k];
             }
             temp[y][x] = acc;
@@ -991,8 +1004,8 @@ fn dhm_gaussian_blur(grid: &[Vec<f64>], sigma: f64) -> Vec<Vec<f64>> {
         for x in 0..w {
             let mut acc = 0.0;
             for k in 0..kernel_size {
-                let sy = (y as isize + k as isize - radius as isize)
-                    .clamp(0, h as isize - 1) as usize;
+                let sy =
+                    (y as isize + k as isize - radius as isize).clamp(0, h as isize - 1) as usize;
                 acc += temp[sy][x] * kernel[k];
             }
             result[y][x] = acc;
