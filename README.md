@@ -26,11 +26,6 @@ Uses **DHM (Danmarks Højdemodel)** from Dataforsyningen — Denmark's national 
 
 ## Usage
 
-### CLI (basic)
-```
-cargo run --no-default-features -- --terrain --output-dir="C:/YOUR_PATH/.minecraft/saves" --bbox="min_lat,min_lng,max_lat,max_lng"
-```
-
 ### CLI with Danish enrichment
 ```
 cargo run --no-default-features -- \
@@ -49,12 +44,6 @@ cargo run --no-default-features -- \
 | `--dhm-token` | `DHM_TOKEN` | [dataforsyningen.dk](https://dataforsyningen.dk) — create a profile and generate a token |
 
 Both flags are optional. Without them, Arnis DK behaves identically to upstream Arnis.
-
-### Linux server build
-A GitHub Actions workflow is included to build a headless Linux binary:
-1. Go to **Actions > Build Linux Binary > Run workflow**
-2. Download the `arnis-linux-x86_64` artifact
-3. Upload to your server, `chmod +x arnis`, and run
 
 ## CLI flags
 
