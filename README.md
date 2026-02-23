@@ -1,94 +1,110 @@
 <img src="assets/git/banner.png" width="100%" alt="Banner">
 
-# Arnis [![CI Build Status](https://github.com/louis-e/arnis/actions/workflows/ci-build.yml/badge.svg)](https://github.com/louis-e/arnis/actions) [<img alt="GitHub Release" src="https://img.shields.io/github/v/release/louis-e/arnis" />](https://github.com/louis-e/arnis/releases) [<img alt="GitHub Downloads (all assets, all releases" src="https://img.shields.io/github/downloads/louis-e/arnis/total" />](https://github.com/louis-e/arnis/releases) [![Download here](https://img.shields.io/badge/Download-here-green)](https://github.com/louis-e/arnis/releases) [![Discord](https://img.shields.io/discord/1326192999738249267?label=Discord&color=%237289da)](https://discord.gg/mA2g69Fhxq)
+# Arnis DK
 
-Arnis creates complex and accurate Minecraft Java Edition (1.17+) and Bedrock Edition worlds that reflect real-world geography, topography, and architecture.
-
-This free and open source project is designed to handle large-scale geographic data from the real world and generate detailed Minecraft worlds. The algorithm processes geospatial data from OpenStreetMap as well as elevation data to create an accurate Minecraft representation of terrain and architecture.
-Generate your hometown, big cities, and natural landscapes with ease!
+A fork of [Arnis](https://github.com/louis-e/arnis) with Denmark-specific enhancements. Generates Minecraft Java Edition (1.17+) and Bedrock Edition worlds from real-world geography, enriched with Danish government data sources for higher-fidelity buildings and terrain.
 
 ![Minecraft Preview](assets/git/preview.jpg)
-<i>This Github page and [arnismc.com](https://arnismc.com) are the only official project websites. Do not download Arnis from any other website.</i>
 
-## :keyboard: Usage
-<img width="60%" src="assets/git/gui.png"><br>
-Download the [latest release](https://github.com/louis-e/arnis/releases/) or [compile](#trophy-open-source) the project on your own.
+## What's different from upstream Arnis?
 
-Choose your area on the map using the rectangle tool and select your Minecraft world - then simply click on <i>Start Generation</i>!
-Additionally, you can customize various generation settings, such as world scale, spawn point, or building interior generation.
+### BBR Building Enrichment
+Integrates with **BBR (Bygnings- og Boligregistret)** — the Danish national building register — via the Datafordeler GraphQL API. When enabled, BBR data fills in missing OSM tags:
+- **Number of floors** (`building:levels`)
+- **Wall material** (`building:material`) — brick, concrete, wood, etc.
+- **Roof material** (`roof:material`) — tile, metal, thatch, etc.
+- **Building use** (`building` type) — residential, commercial, industrial, etc.
 
-## 📚 Documentation
+This produces more accurate and varied buildings compared to OSM data alone.
 
-<img src="assets/git/documentation.png" width="100%" alt="Banner">
+### DHM High-Resolution Terrain
+Uses **DHM (Danmarks Højdemodel)** from Dataforsyningen — Denmark's national elevation model at 0.4m resolution. This replaces the default AWS terrain tiles with far more detailed elevation data, including:
+- Accurate coastal terrain and cliffs
+- Sea level detection with automatic water fill below sea level
+- Gaussian-smoothed terrain for natural-looking landscapes
 
-Full documentation is available in the [GitHub Wiki](https://github.com/louis-e/arnis/wiki/), covering topics such as technical explanations, FAQs, contribution guidelines and roadmaps.
+### Other improvements
+- **Water rendering fix**: Water polygon ways now use scanline rasterization instead of flood fill, fixing rendering of concave water bodies
+- **Tiny building filter**: Structures with a footprint smaller than 4x4 blocks are skipped, removing out-of-place sheds and utility boxes
+- **DHM request retry logic**: Automatic retries with backoff for elevation data requests
 
-## :trophy: Open Source
-#### Key objectives of this project
-- **Modularity**: Ensure that all components (e.g., data fetching, processing, and world generation) are cleanly separated into distinct modules for better maintainability and scalability.
-- **Performance Optimization**: We aim to keep a good performance and speed of the world generation process.
-- **Comprehensive Documentation**: Detailed in-code documentation for a clear structure and logic.
-- **User-Friendly Experience**: Focus on making the project easy to use for end users.
-- **Cross-Platform Support**: We want this project to run smoothly on Windows, macOS, and Linux.
+## Usage
 
-#### How to contribute
-This project is open source and welcomes contributions from everyone! Whether you're interested in fixing bugs, improving performance, adding new features, or enhancing documentation, your input is valuable. Simply fork the repository, make your changes, and submit a pull request. Please respect the above mentioned key objectives. Contributions of all levels are appreciated, and your efforts help improve this tool for everyone.
+### GUI
+Download the [latest release](https://github.com/louis-e/arnis/releases/) or compile with:
+```
+cargo run
+```
 
-Command line Build: ```cargo run --no-default-features -- --terrain --path="C:/YOUR_PATH/.minecraft/saves/worldname" --bbox="min_lat,min_lng,max_lat,max_lng"```<br>
-GUI Build: ```cargo run```<br>
+### CLI (basic)
+```
+cargo run --no-default-features -- --terrain --output-dir="C:/YOUR_PATH/.minecraft/saves" --bbox="min_lat,min_lng,max_lat,max_lng"
+```
 
-After your pull request was merged, I will take care of regularly creating update releases which will include your changes.
+### CLI with Danish enrichment
+```
+cargo run --no-default-features -- \
+  --terrain \
+  --output-dir="/path/to/.minecraft/saves" \
+  --bbox="55.395,11.330,55.415,11.370" \
+  --bbr --bbr-credentials="YOUR_DATAFORDELER_KEY" \
+  --dhm-token="YOUR_DATAFORSYNINGEN_TOKEN"
+```
 
-If you are using Nix, you can run the program directly with `nix run github:louis-e/arnis -- --terrain --path=YOUR_PATH/.minecraft/saves/worldname --bbox="min_lat,min_lng,max_lat,max_lng"`
+### API keys
 
-## :star: Star History
+| Flag | Env variable | Where to get it |
+|------|-------------|-----------------|
+| `--bbr-credentials` | `BBR_CREDENTIALS` | [datafordeler.dk](https://datafordeler.dk) — create an IT-system and generate an API key |
+| `--dhm-token` | `DHM_TOKEN` | [dataforsyningen.dk](https://dataforsyningen.dk) — create a profile and generate a token |
 
-<a href="https://star-history.com/#louis-e/arnis&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=louis-e/arnis&Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=louis-e/arnis&Date&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=louis-e/arnis&Date&type=Date" />
- </picture>
-</a>
+Both flags are optional. Without them, Arnis DK behaves identically to upstream Arnis.
 
-## :newspaper: Academic & Press Recognition
+### Linux server build
+A GitHub Actions workflow is included to build a headless Linux binary:
+1. Go to **Actions > Build Linux Binary > Run workflow**
+2. Download the `arnis-linux-x86_64` artifact
+3. Upload to your server, `chmod +x arnis`, and run
 
-<img src="assets/git/recognition.png" width="100%" alt="Banner">
+## All CLI flags
 
-Arnis has been recognized in various academic and press publications after gaining a lot of attention in December 2024.
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--bbox` | *required* | Bounding box: `min_lat,min_lng,max_lat,max_lng` |
+| `--output-dir` | *required (Java)* | Directory where the world is created |
+| `--bedrock` | `false` | Generate Bedrock Edition (.mcworld) instead of Java |
+| `--terrain` | `false` | Enable terrain elevation |
+| `--scale` | `1.0` | World scale in blocks per meter |
+| `--ground-level` | `-62` | Base ground level Y coordinate |
+| `--interior` | `true` | Generate building interiors |
+| `--roof` | `true` | Generate building roofs |
+| `--fillground` | `false` | Fill ground with stone below surface |
+| `--city-boundaries` | `true` | Detect urban areas for stone ground |
+| `--bbr` | `false` | Enable BBR building enrichment (Denmark) |
+| `--bbr-credentials` | — | Datafordeler API key for BBR |
+| `--dhm-token` | — | Dataforsyningen token for DHM terrain |
+| `--debug` | `false` | Enable debug output |
+| `--timeout` | — | Flood fill timeout in seconds |
 
-[Floodcraft: Game-based Interactive Learning Environment using Minecraft for Flood Mitigation and Preparedness for K-12 Education](https://www.researchgate.net/publication/384644535_Floodcraft_Game-based_Interactive_Learning_Environment_using_Minecraft_for_Flood_Mitigation_and_Preparedness_for_K-12_Education)
+## Building from source
 
-[Hackaday: Bringing OpenStreetMap Data into Minecraft](https://hackaday.com/2024/12/30/bringing-openstreetmap-data-into-minecraft/)
+**GUI build** (requires Tauri dependencies):
+```
+cargo run
+```
 
-[TomsHardware: Minecraft Tool Lets You Create Scale Replicas of Real-World Locations](https://www.tomshardware.com/video-games/pc-gaming/minecraft-tool-lets-you-create-scale-replicas-of-real-world-locations-arnis-uses-geospatial-data-from-openstreetmap-to-generate-minecraft-maps)
+**CLI-only build** (no GUI dependencies):
+```
+cargo build --release --no-default-features
+```
 
-[XDA Developers: Hometown Minecraft Map: Arnis](https://www.xda-developers.com/hometown-minecraft-map-arnis/)
+## Documentation
 
-Free to use assets, including screenshots and logos, can be found [here](https://drive.google.com/file/d/1T1IsZSyT8oa6qAO_40hVF5KR8eEVCJjo/view?usp=sharing).
+Full upstream documentation is available in the [Arnis Wiki](https://github.com/louis-e/arnis/wiki/).
 
-## :copyright: License Information
+## License
 Copyright (c) 2022-2025 Louis Erbkamm (louis-e)
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
 
-http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.[^3]
-
-Download Arnis only from the official source https://arnismc.com or https://github.com/louis-e/arnis/. Every other website providing a download and claiming to be affiliated with the project is unofficial and may be malicious.
-
-The logo was made by @nxfx21.
-
-
-[^1]: https://en.wikipedia.org/wiki/OpenStreetMap
-
-[^2]: https://en.wikipedia.org/wiki/Arnis,_Germany
-
-[^3]: https://github.com/louis-e/arnis/blob/main/LICENSE
+Based on [Arnis](https://github.com/louis-e/arnis) by louis-e.
