@@ -620,10 +620,9 @@ pub fn enrich_with_bbr(
             matched += 1;
             let mut did_enrich = false;
 
-            // BBR is authoritative for Denmark — always apply its data.
-            // building:levels — always override since BBR is the official source
+            // building:levels — only fill in from BBR when OSM has no value
             if let Some(levels) = bbr.antal_etager {
-                if levels >= 1 {
+                if levels >= 1 && !way.tags.contains_key("building:levels") {
                     way.tags
                         .insert("building:levels".to_string(), levels.to_string());
                     did_enrich = true;
