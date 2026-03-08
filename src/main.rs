@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod args;
-mod bbr;
+mod dhm;
 #[cfg(feature = "bedrock")]
 mod bedrock_block_map;
 mod block_definitions;
@@ -180,19 +180,6 @@ fn run_cli() {
         }
     }
 
-    // Enrich buildings with BBR data (Danish building register) if enabled
-    if args.bbr {
-        let api_key = args
-            .bbr_credentials
-            .as_deref()
-            .expect("BBR enrichment requires an API key. Use --bbr-credentials YOUR_API_KEY or set BBR_CREDENTIALS env var.");
-        if let Err(e) = bbr::enrich_with_bbr(&mut parsed_elements, args.bbox, api_key) {
-            eprintln!(
-                "{} BBR enrichment failed: {e}. Continuing with OSM data only.",
-                "Warning:".yellow().bold()
-            );
-        }
-    }
 
     // Transform map (parsed_elements). Operations are defined in a json file
     map_transformation::transform_map(&mut parsed_elements, &mut xzbbox, &mut ground);
@@ -250,3 +237,6 @@ fn main() {
 
     run_cli();
 }
+
+
+

@@ -1,20 +1,11 @@
 # Arnis DK
 
-A fork of [Arnis](https://github.com/louis-e/arnis) with Denmark-specific enhancements. Generates Minecraft Java Edition (1.17+) and Bedrock Edition worlds from real-world geography, enriched with Danish government data sources for higher-fidelity buildings and terrain.
+A fork of [Arnis](https://github.com/louis-e/arnis) with Denmark-specific enhancements. Generates Minecraft Java Edition (1.17+) and Bedrock Edition worlds from real-world geography, with Danish terrain support and improved coastal water handling.
 
 ## What's different from upstream Arnis?
 
-### BBR Building Enrichment
-Integrates with **BBR (Bygnings- og Boligregistret)** — the Danish national building register — via the Datafordeler GraphQL API. When enabled, BBR data fills in missing OSM tags:
-- **Number of floors** (`building:levels`)
-- **Wall material** (`building:material`) — brick, concrete, wood, etc.
-- **Roof material** (`roof:material`) — tile, metal, thatch, etc.
-- **Building use** (`building` type) — residential, commercial, industrial, etc.
-
-This produces more accurate and varied buildings compared to OSM data alone.
-
 ### DHM High-Resolution Terrain
-Uses **DHM (Danmarks Højdemodel)** from Dataforsyningen — Denmark's national elevation model at 0.4m resolution. This replaces the default AWS terrain tiles with far more detailed elevation data, including:
+Uses **DHM (Danmarks Hojdemodel)** from Dataforsyningen, Denmark's national elevation model at 0.4m resolution. This replaces the default AWS terrain tiles with far more detailed elevation data, including:
 - Accurate coastal terrain and cliffs
 - Sea level detection with automatic water fill below sea level
 - Coastline-driven ocean generation, with optional dataset-backed water polygons for more reliable coastal rendering in harbors and reclaimed waterfront areas
@@ -28,13 +19,12 @@ Uses **DHM (Danmarks Højdemodel)** from Dataforsyningen — Denmark's national 
 
 ## Usage
 
-### CLI with Danish enrichment
+### CLI with DHM terrain
 ```
 cargo run --no-default-features -- \
   --terrain \
   --output-dir="/path/to/.minecraft/saves" \
   --bbox="55.395,11.330,55.415,11.370" \
-  --bbr --bbr-credentials="YOUR_DATAFORDELER_KEY" \
   --dhm-token="YOUR_DATAFORSYNINGEN_TOKEN"
 ```
 
@@ -47,14 +37,14 @@ cargo run --no-default-features -- \
   --bbox="55.670,12.560,55.695,12.620" \
   --land-polygons="/path/to/water_polygons.shp"
 ```
+
 ### API keys
 
 | Flag | Env variable | Where to get it |
 |------|-------------|-----------------|
-| `--bbr-credentials` | `BBR_CREDENTIALS` | [datafordeler.dk](https://datafordeler.dk) — create an IT-system and generate an API key |
-| `--dhm-token` | `DHM_TOKEN` | [dataforsyningen.dk](https://dataforsyningen.dk) — create a profile and generate a token |
+| `--dhm-token` | `DHM_TOKEN` | [dataforsyningen.dk](https://dataforsyningen.dk) - create a profile and generate a token |
 
-Both flags are optional. Without them, Arnis DK behaves identically to upstream Arnis.
+The DHM token is optional. Without it, Arnis DK falls back to its default terrain source.
 
 ## CLI flags
 
@@ -70,18 +60,16 @@ Both flags are optional. Without them, Arnis DK behaves identically to upstream 
 | `--roof` | `true` | Generate building roofs |
 | `--fillground` | `false` | Fill ground with stone below surface |
 | `--city-boundaries` | `true` | Detect urban areas for stone ground |
-| `--bbr` | `false` | Enable BBR building enrichment (Denmark) |
-| `--bbr-credentials` | — | Datafordeler API key for BBR |
-| `--dhm-token` | — | Dataforsyningen token for DHM terrain |
-| `--land-polygons` | — | Path to an extracted OSM coastline polygon shapefile (`water_polygons.shp` recommended) for dataset-backed ocean masking; keep the extracted shapefile local rather than committing it |
+| `--dhm-token` | - | Dataforsyningen token for DHM terrain |
+| `--land-polygons` | - | Path to an extracted OSM coastline polygon shapefile (`water_polygons.shp` recommended) for dataset-backed ocean masking; keep the extracted shapefile local rather than committing it |
 | `--debug` | `false` | Enable debug output |
-| `--timeout` | — | Flood fill timeout in seconds |
+| `--timeout` | - | Flood fill timeout in seconds |
 
 ## Disclaimer
 
-This fork was developed with the assistance of AI 
+This fork was developed with the assistance of AI.
 
-Building and terrain data from [Datafordeler](https://datafordeler.dk) (BBR) and [Dataforsyningen](https://dataforsyningen.dk) (DHM) is provided by the Danish government. If you use this data, you must credit the respective data sources in accordance with their terms of use.
+Terrain data from [Dataforsyningen](https://dataforsyningen.dk) (DHM) is provided by the Danish government. If you use this data, you must credit the source in accordance with its terms of use.
 
 ## License
 Copyright (c) 2022-2025 Louis Erbkamm (louis-e)
@@ -89,4 +77,3 @@ Copyright (c) 2022-2025 Louis Erbkamm (louis-e)
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
 
 Based on [Arnis](https://github.com/louis-e/arnis) by louis-e.
-

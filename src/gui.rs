@@ -899,8 +899,6 @@ fn gui_start_generation(
                 city_boundaries: city_boundaries_enabled,
                 debug: false,
                 timeout: Some(std::time::Duration::from_secs(40)),
-                bbr: false,
-                bbr_credentials: None,
                 dhm_token: None,
             };
 
@@ -1011,3 +1009,5 @@ fn gui_start_generation(
 
     Ok(())
 }
+
+

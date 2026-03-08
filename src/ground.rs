@@ -156,7 +156,7 @@ pub fn generate_ground_data(args: &Args) -> Ground {
 
         // Try DHM (high-res Danish terrain) first if token is available
         if let Some(ref token) = args.dhm_token {
-            match crate::bbr::fetch_dhm_elevation(&args.bbox, args.scale, args.ground_level, token)
+            match crate::dhm::fetch_dhm_elevation(&args.bbox, args.scale, args.ground_level, token)
             {
                 Ok(elevation_data) => {
                     let ground = Ground {
@@ -186,3 +186,4 @@ pub fn generate_ground_data(args: &Args) -> Ground {
     }
     Ground::new_flat(args.ground_level)
 }
+
