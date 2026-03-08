@@ -29,7 +29,7 @@ cargo run --no-default-features -- \
 ```
 
 ### Coastline dataset-backed oceans
-For coastal city tests, use the extracted `water_polygons.shp` from the OSM water polygon dataset `water-polygons-split-4326` and pass it with:
+For coastal city tests, download [water-polygons-split-4326.zip](https://osmdata.openstreetmap.de/download/water-polygons-split-4326.zip) from the official [OSM water polygons dataset page](https://osmdata.openstreetmap.de/data/water-polygons.html), extract water_polygons.shp, and pass it with:
 ```
 cargo run --no-default-features -- \
   --terrain \
@@ -77,3 +77,6 @@ Copyright (c) 2022-2025 Louis Erbkamm (louis-e)
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
 
 Based on [Arnis](https://github.com/louis-e/arnis) by louis-e.
+
+
+
