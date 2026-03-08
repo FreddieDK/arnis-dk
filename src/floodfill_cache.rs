@@ -6,7 +6,7 @@
 
 use crate::coordinate_system::cartesian::XZBBox;
 use crate::floodfill::flood_fill_area;
-use crate::osm_parser::{ProcessedElement, ProcessedMemberRole, ProcessedWay};
+use crate::osm_parser::{ProcessedElement, ProcessedMemberRole, ProcessedRelation, ProcessedWay};
 use fnv::FnvHashMap;
 use rayon::prelude::*;
 use std::time::Duration;
@@ -336,7 +336,7 @@ impl FloodFillCache {
             || way
                 .tags
                 .get("natural")
-                .map(|v| v != "tree")
+                .map(|v| v != "tree" && v != "coastline")
                 .unwrap_or(false)
             // Highway areas (like pedestrian plazas) use flood fill when area=yes
             || (way.tags.contains_key("highway")
@@ -393,6 +393,189 @@ impl FloodFillCache {
         }
 
         footprints
+    }
+
+    /// Collects dry-land coordinates from OSM area features that should not be
+    /// reclaimed by the synthetic coastline ocean pass.
+    pub fn collect_dry_land_mask(
+        &self,
+        elements: &[ProcessedElement],
+        xzbbox: &XZBBox,
+    ) -> CoordinateBitmap {
+        let mut dry_land = CoordinateBitmap::new(xzbbox);
+
+        for element in elements {
+            match element {
+                ProcessedElement::Way(way) => {
+                    if Self::way_contributes_to_dry_land(way) {
+                        if let Some(cached) = self.way_cache.get(&way.id) {
+                            for &(x, z) in cached {
+                                dry_land.set(x, z);
+                            }
+                        }
+                    }
+                }
+                ProcessedElement::Relation(rel) => {
+                    if Self::relation_contributes_to_dry_land(rel) {
+                        for member in &rel.members {
+                            if member.role == ProcessedMemberRole::Outer {
+                                if let Some(cached) = self.way_cache.get(&member.way.id) {
+                                    for &(x, z) in cached {
+                                        dry_land.set(x, z);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        dry_land
+    }
+
+    /// Collects coordinates for OSM features that are explicitly mapped as water.
+    pub fn collect_explicit_water_mask(
+        &self,
+        elements: &[ProcessedElement],
+        xzbbox: &XZBBox,
+    ) -> CoordinateBitmap {
+        let mut water = CoordinateBitmap::new(xzbbox);
+
+        for element in elements {
+            match element {
+                ProcessedElement::Way(way) => {
+                    if Self::way_contributes_to_explicit_water(way) {
+                        if let Some(cached) = self.way_cache.get(&way.id) {
+                            for &(x, z) in cached {
+                                water.set(x, z);
+                            }
+                        }
+                    }
+                }
+                ProcessedElement::Relation(rel) => {
+                    if Self::relation_contributes_to_explicit_water(rel) {
+                        for member in &rel.members {
+                            if member.role == ProcessedMemberRole::Outer {
+                                if let Some(cached) = self.way_cache.get(&member.way.id) {
+                                    for &(x, z) in cached {
+                                        water.set(x, z);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        water
+    }
+
+    fn way_contributes_to_explicit_water(way: &ProcessedWay) -> bool {
+        way.tags.contains_key("water")
+            || way
+                .tags
+                .get("natural")
+                .map(|v| v == "water" || v == "bay")
+                .unwrap_or(false)
+            || way
+                .tags
+                .get("waterway")
+                .map(|v| v == "dock" || v == "riverbank")
+                .unwrap_or(false)
+            || way
+                .tags
+                .get("landuse")
+                .map(|v| v == "reservoir" || v == "basin")
+                .unwrap_or(false)
+            || way
+                .tags
+                .get("leisure")
+                .map(|v| v == "swimming_pool")
+                .unwrap_or(false)
+            || way
+                .tags
+                .get("man_made")
+                .map(|v| v == "basin")
+                .unwrap_or(false)
+    }
+
+    fn relation_contributes_to_explicit_water(rel: &ProcessedRelation) -> bool {
+        rel.tags.contains_key("water")
+            || rel
+                .tags
+                .get("natural")
+                .map(|v| v == "water" || v == "bay")
+                .unwrap_or(false)
+            || rel
+                .tags
+                .get("waterway")
+                .map(|v| v == "dock" || v == "riverbank")
+                .unwrap_or(false)
+            || rel
+                .tags
+                .get("landuse")
+                .map(|v| v == "reservoir" || v == "basin")
+                .unwrap_or(false)
+            || rel
+                .tags
+                .get("leisure")
+                .map(|v| v == "swimming_pool")
+                .unwrap_or(false)
+            || rel
+                .tags
+                .get("man_made")
+                .map(|v| v == "basin")
+                .unwrap_or(false)
+    }
+
+    fn way_contributes_to_dry_land(way: &ProcessedWay) -> bool {
+        way.tags.contains_key("building")
+            || way.tags.contains_key("building:part")
+            || way.tags.contains_key("landuse")
+            || way.tags.contains_key("leisure")
+            || way.tags.contains_key("amenity")
+            || way.tags.contains_key("man_made")
+            || way.tags.contains_key("railway")
+            || way.tags.contains_key("aeroway")
+            || way.tags.contains_key("area:aeroway")
+            || (way.tags.contains_key("highway")
+                && way.tags.get("area").map(|v| v == "yes").unwrap_or(false))
+            || way
+                .tags
+                .get("tomb")
+                .map(|v| v == "pyramid")
+                .unwrap_or(false)
+            || way
+                .tags
+                .get("natural")
+                .map(|v| {
+                    v != "water" && v != "bay" && v != "coastline" && v != "reef" && v != "wetland"
+                })
+                .unwrap_or(false)
+    }
+
+    fn relation_contributes_to_dry_land(rel: &ProcessedRelation) -> bool {
+        rel.tags.contains_key("building")
+            || rel.tags.contains_key("building:part")
+            || rel.tags.get("type").map(|t| t.as_str()) == Some("building")
+            || rel.tags.contains_key("landuse")
+            || rel.tags.contains_key("leisure")
+            || rel.tags.contains_key("amenity")
+            || rel.tags.contains_key("man_made")
+            || rel.tags.contains_key("railway")
+            || rel.tags.contains_key("aeroway")
+            || rel.tags.contains_key("area:aeroway")
+            || rel
+                .tags
+                .get("natural")
+                .map(|v| {
+                    v != "water" && v != "bay" && v != "coastline" && v != "reef" && v != "wetland"
+                })
+                .unwrap_or(false)
     }
 
     /// Collects centroids of all buildings from the pre-computed cache.
@@ -473,6 +656,30 @@ impl FloodFillCache {
 impl Default for FloodFillCache {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn place_polygons_do_not_count_as_dry_land() {
+        let way = ProcessedWay {
+            id: 1,
+            nodes: Vec::new(),
+            tags: HashMap::from([("place".to_string(), "sea".to_string())]),
+        };
+
+        let rel = ProcessedRelation {
+            id: 2,
+            tags: HashMap::from([("place".to_string(), "city".to_string())]),
+            members: Vec::new(),
+        };
+
+        assert!(!FloodFillCache::way_contributes_to_dry_land(&way));
+        assert!(!FloodFillCache::relation_contributes_to_dry_land(&rel));
     }
 }
 

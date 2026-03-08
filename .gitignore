@@ -32,6 +32,7 @@ Thumbs.db
 /elevation_debug.png
 /terrain-tile-cache
 /arnis-tile-cache
+/data/land-polygons/
 /gen/
 /build/
 *.rmeta
@@ -50,3 +51,4 @@ gen/
 /flake/*
 !/flake/flake.nix
 !/flake/flake.lock
+

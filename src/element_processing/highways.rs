@@ -1,8 +1,8 @@
 use crate::args::Args;
 use crate::block_definitions::*;
 use crate::bresenham::bresenham_line;
-use crate::coordinate_system::cartesian::XZPoint;
-use crate::floodfill_cache::FloodFillCache;
+use crate::coordinate_system::cartesian::{XZBBox, XZPoint};
+use crate::floodfill_cache::{CoordinateBitmap, FloodFillCache};
 use crate::osm_parser::{ProcessedElement, ProcessedWay};
 use crate::world_editor::WorldEditor;
 use std::collections::HashMap;
@@ -68,6 +68,107 @@ pub fn build_highway_connectivity_map(elements: &[ProcessedElement]) -> HighwayC
     }
 
     connectivity_map
+}
+
+pub fn collect_ground_highway_mask(
+    elements: &[ProcessedElement],
+    xzbbox: &XZBBox,
+    scale: f64,
+) -> CoordinateBitmap {
+    let mut mask = CoordinateBitmap::new(xzbbox);
+
+    for element in elements {
+        let ProcessedElement::Way(way) = element else {
+            continue;
+        };
+
+        if !way.tags.contains_key("highway") || !is_ground_level_highway(&way.tags) {
+            continue;
+        }
+
+        let Some(mut radius) = highway_mask_radius(&way.tags, scale) else {
+            continue;
+        };
+
+        // Slightly widen the dry corridor so curb-adjacent ocean fill does not
+        // leave streets looking flooded.
+        radius += 1;
+
+        let mut previous_node: Option<XZPoint> = None;
+        for node in &way.nodes {
+            let current = node.xz();
+            if let Some(prev) = previous_node {
+                let points = bresenham_line(prev.x, 0, prev.z, current.x, 0, current.z);
+                for (x, _, z) in points {
+                    for dx in -radius..=radius {
+                        for dz in -radius..=radius {
+                            mask.set(x + dx, z + dz);
+                        }
+                    }
+                }
+            }
+            previous_node = Some(current);
+        }
+    }
+
+    mask
+}
+
+fn is_ground_level_highway(tags: &HashMap<String, String>) -> bool {
+    if tags.get("indoor").is_some_and(|v| v == "yes") {
+        return false;
+    }
+
+    if tags.get("bridge").is_some_and(|v| v != "no") {
+        return false;
+    }
+
+    if tags.get("area").is_some_and(|v| v == "yes") {
+        return false;
+    }
+
+    if tags
+        .get("level")
+        .and_then(|v| v.parse::<i32>().ok())
+        .is_some_and(|level| level < 0)
+    {
+        return false;
+    }
+
+    !tags
+        .get("layer")
+        .and_then(|v| v.parse::<i32>().ok())
+        .is_some_and(|layer| layer > 0 || layer < 0)
+}
+
+fn highway_mask_radius(tags: &HashMap<String, String>, scale: f64) -> Option<i32> {
+    let highway_type = tags.get("highway")?;
+    let mut block_range = match highway_type.as_str() {
+        "footway" | "pedestrian" | "path" | "track" | "steps" => 1,
+        "motorway" | "primary" | "trunk" => 5,
+        "secondary" => 4,
+        "service" => 2,
+        "secondary_link" | "tertiary_link" | "escape" => 1,
+        _ => {
+            if let Some(lanes) = tags.get("lanes") {
+                if lanes == "2" {
+                    3
+                } else if lanes != "1" {
+                    4
+                } else {
+                    2
+                }
+            } else {
+                2
+            }
+        }
+    };
+
+    if scale < 1.0 {
+        block_range = ((block_range as f64) * scale).floor() as i32;
+    }
+
+    Some(block_range.max(1))
 }
 
 /// Internal function that generates highways with connectivity context for elevation handling
@@ -872,5 +973,61 @@ pub fn generate_aeroway(editor: &mut WorldEditor, way: &ProcessedWay, args: &Arg
             }
         }
         previous_node = Some((node.x, node.z));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn highway_way(id: u64, coords: &[(i32, i32)], tags: &[(&str, &str)]) -> ProcessedElement {
+        ProcessedElement::Way(ProcessedWay {
+            id,
+            nodes: coords
+                .iter()
+                .enumerate()
+                .map(|(idx, (x, z))| crate::osm_parser::ProcessedNode {
+                    id: id * 100 + idx as u64,
+                    tags: HashMap::new(),
+                    x: *x,
+                    z: *z,
+                })
+                .collect(),
+            tags: tags
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect(),
+        })
+    }
+
+    #[test]
+    fn ground_highway_mask_covers_surface_roads() {
+        let bbox = XZBBox::rect_from_xz_lengths(20.0, 20.0).unwrap();
+        let elements = vec![highway_way(
+            1,
+            &[(5, 10), (15, 10)],
+            &[("highway", "service")],
+        )];
+
+        let mask = collect_ground_highway_mask(&elements, &bbox, 1.0);
+
+        assert!(mask.contains(10, 10));
+        assert!(mask.contains(10, 12));
+        assert!(!mask.contains(10, 16));
+    }
+
+    #[test]
+    fn ground_highway_mask_skips_bridges() {
+        let bbox = XZBBox::rect_from_xz_lengths(20.0, 20.0).unwrap();
+        let elements = vec![highway_way(
+            2,
+            &[(5, 10), (15, 10)],
+            &[("highway", "service"), ("bridge", "yes")],
+        )];
+
+        let mask = collect_ground_highway_mask(&elements, &bbox, 1.0);
+
+        assert!(!mask.contains(10, 10));
     }
 }

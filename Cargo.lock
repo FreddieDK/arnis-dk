@@ -208,6 +208,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "shapefile",
  "tauri",
  "tauri-build",
  "tauri-plugin-log",
@@ -1255,6 +1256,16 @@ dependencies = [
  "darling_core",
  "quote",
  "syn 2.0.114",
+]
+
+[[package]]
+name = "dbase"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b2ee10366b9a0956358110073ea66ab06d77169ee9955d32c9ba7b7b8d4e1c3"
+dependencies = [
+ "byteorder",
+ "time",
 ]
 
 [[package]]
@@ -5176,6 +5187,16 @@ dependencies = [
  "cfg-if 1.0.4",
  "cpufeatures",
  "digest",
+]
+
+[[package]]
+name = "shapefile"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c318c0e76bc2d54086b2d936ae0ca92eab5b84eb73f5704c1d14dba33be643e3"
+dependencies = [
+ "byteorder",
+ "dbase",
 ]
 
 [[package]]

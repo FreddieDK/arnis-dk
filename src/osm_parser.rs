@@ -258,10 +258,18 @@ pub fn parse_osm_data(
             continue;
         }
 
+        // Coastlines need to stay unclipped until after segment merging so ocean
+        // reconstruction can use the full shoreline context near bbox edges.
+        let nodes = if is_coastline_way(&way.tags) {
+            way.nodes.clone()
+        } else {
+            clipped_nodes
+        };
+
         let processed: ProcessedWay = ProcessedWay {
             id: element.id,
             tags: way.tags.clone(),
-            nodes: clipped_nodes,
+            nodes,
         };
 
         processed_elements.push(ProcessedElement::Way(processed));
@@ -372,6 +380,10 @@ pub fn parse_osm_data(
 }
 
 /// Returns true if tags indicate a water element handled by water_areas.rs.
+fn is_coastline_way(tags: &HashMap<String, String>) -> bool {
+    tags.get("natural") == Some(&"coastline".to_string())
+}
+
 fn is_water_element(tags: &HashMap<String, String>) -> bool {
     // Check for explicit water tag
     if tags.contains_key("water") {

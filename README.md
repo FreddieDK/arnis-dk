@@ -17,10 +17,12 @@ This produces more accurate and varied buildings compared to OSM data alone.
 Uses **DHM (Danmarks Højdemodel)** from Dataforsyningen — Denmark's national elevation model at 0.4m resolution. This replaces the default AWS terrain tiles with far more detailed elevation data, including:
 - Accurate coastal terrain and cliffs
 - Sea level detection with automatic water fill below sea level
+- Coastline-driven ocean generation, with optional dataset-backed water polygons for more reliable coastal rendering in harbors and reclaimed waterfront areas
 - Gaussian-smoothed terrain for natural-looking landscapes
 
 ### Other improvements
 - **Water rendering fix**: Water polygon ways now use scanline rasterization instead of flood fill, fixing rendering of concave water bodies
+- **Ocean handling fix**: `natural=coastline` ways are converted into ocean polygons, and `--land-polygons` can now use `water_polygons.shp` as a dataset-backed coastline mask when OSM coastline inference is not enough
 - **Tiny building filter**: Structures with a footprint smaller than 4x4 blocks are skipped, removing out-of-place sheds and utility boxes
 - **DHM request retry logic**: Automatic retries with backoff for elevation data requests
 
@@ -36,6 +38,15 @@ cargo run --no-default-features -- \
   --dhm-token="YOUR_DATAFORSYNINGEN_TOKEN"
 ```
 
+### Coastline dataset-backed oceans
+For coastal city tests, use the extracted `water_polygons.shp` from the OSM water polygon dataset `water-polygons-split-4326` and pass it with:
+```
+cargo run --no-default-features -- \
+  --terrain \
+  --output-dir="/path/to/.minecraft/saves" \
+  --bbox="55.670,12.560,55.695,12.620" \
+  --land-polygons="/path/to/water_polygons.shp"
+```
 ### API keys
 
 | Flag | Env variable | Where to get it |
@@ -62,6 +73,7 @@ Both flags are optional. Without them, Arnis DK behaves identically to upstream 
 | `--bbr` | `false` | Enable BBR building enrichment (Denmark) |
 | `--bbr-credentials` | — | Datafordeler API key for BBR |
 | `--dhm-token` | — | Dataforsyningen token for DHM terrain |
+| `--land-polygons` | — | Path to an extracted OSM coastline polygon shapefile (`water_polygons.shp` recommended) for dataset-backed ocean masking; keep the extracted shapefile local rather than committing it |
 | `--debug` | `false` | Enable debug output |
 | `--timeout` | — | Flood fill timeout in seconds |
 
@@ -77,3 +89,4 @@ Copyright (c) 2022-2025 Louis Erbkamm (louis-e)
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
 
 Based on [Arnis](https://github.com/louis-e/arnis) by louis-e.
+

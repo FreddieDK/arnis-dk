@@ -124,6 +124,23 @@ fn generate_water_areas(
     outers: &[Vec<ProcessedNode>],
     inners: &[Vec<ProcessedNode>],
 ) {
+    let outers_xz: Vec<Vec<XZPoint>> = outers
+        .iter()
+        .map(|x| x.iter().map(|y| y.xz()).collect::<Vec<_>>())
+        .collect();
+    let inners_xz: Vec<Vec<XZPoint>> = inners
+        .iter()
+        .map(|x| x.iter().map(|y| y.xz()).collect::<Vec<_>>())
+        .collect();
+
+    fill_water_polygons(editor, &outers_xz, &inners_xz);
+}
+
+pub(crate) fn fill_water_polygons(
+    editor: &mut WorldEditor,
+    outers: &[Vec<XZPoint>],
+    inners: &[Vec<XZPoint>],
+) {
     // Calculate polygon bounding box to limit fill area
     let mut poly_min_x = i32::MAX;
     let mut poly_min_z = i32::MAX;
@@ -152,16 +169,7 @@ fn generate_water_areas(
     let max_x = poly_max_x.min(world_max_x);
     let max_z = poly_max_z.min(world_max_z);
 
-    let outers_xz: Vec<Vec<XZPoint>> = outers
-        .iter()
-        .map(|x| x.iter().map(|y| y.xz()).collect::<Vec<_>>())
-        .collect();
-    let inners_xz: Vec<Vec<XZPoint>> = inners
-        .iter()
-        .map(|x| x.iter().map(|y| y.xz()).collect::<Vec<_>>())
-        .collect();
-
-    scanline_fill_water(min_x, min_z, max_x, max_z, &outers_xz, &inners_xz, editor);
+    scanline_fill_water(min_x, min_z, max_x, max_z, outers, inners, editor);
 }
 
 /// Verifies all rings are properly closed (first node matches last).

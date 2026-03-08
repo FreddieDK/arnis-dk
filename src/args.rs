@@ -15,6 +15,11 @@ pub struct Args {
     #[arg(long, group = "location")]
     pub file: Option<String>,
 
+    /// Path to an extracted OSM land polygons shapefile (.shp).
+    /// Recommended dataset: land-polygons-complete-4326 from osmdata.openstreetmap.de.
+    #[arg(long)]
+    pub land_polygons: Option<PathBuf>,
+
     /// JSON file to save OSM data to (optional)
     #[arg(long, group = "location")]
     pub save_json_file: Option<String>,
@@ -95,6 +100,15 @@ pub struct Args {
 /// where a new world will be created automatically.
 /// For Bedrock Edition (`--bedrock`): `--path` is optional (defaults to Desktop output).
 pub fn validate_args(args: &Args) -> Result<(), String> {
+    if let Some(ref land_polygons) = args.land_polygons {
+        if !land_polygons.exists() {
+            return Err(format!(
+                "Coastline polygon path does not exist: {}",
+                land_polygons.display()
+            ));
+        }
+    }
+
     if args.bedrock {
         // Bedrock: path is optional; if provided, it must be an existing directory
         if let Some(ref path) = args.path {
@@ -237,3 +251,4 @@ mod tests {
         // assert!(Args::try_parse_from(cmd.iter()).is_ok());
     }
 }
+

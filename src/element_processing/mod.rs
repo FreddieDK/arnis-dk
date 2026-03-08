@@ -11,6 +11,7 @@ pub mod landuse;
 pub mod leisure;
 pub mod man_made;
 pub mod natural;
+pub mod oceans;
 pub mod power;
 pub mod railways;
 pub mod subprocessor;

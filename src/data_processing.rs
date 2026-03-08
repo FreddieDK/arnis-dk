@@ -3,7 +3,7 @@ use crate::block_definitions::{BEDROCK, DIRT, GRASS_BLOCK, SMOOTH_STONE, STONE, 
 use crate::coordinate_system::cartesian::XZBBox;
 use crate::coordinate_system::geographic::LLBBox;
 use crate::element_processing::*;
-use crate::floodfill_cache::FloodFillCache;
+use crate::floodfill_cache::{CoordinateBitmap, FloodFillCache};
 use crate::ground::Ground;
 use crate::map_renderer;
 use crate::osm_parser::{ProcessedElement, ProcessedMemberRole};
@@ -69,6 +69,12 @@ pub fn generate_world_with_options(
     // Collect building footprints to prevent trees from spawning inside buildings
     // Uses a memory-efficient bitmap (~1 bit per coordinate) instead of a HashSet (~24 bytes per coordinate)
     let building_footprints = flood_fill_cache.collect_building_footprints(&elements, &xzbbox);
+    let dry_land_mask: CoordinateBitmap =
+        flood_fill_cache.collect_dry_land_mask(&elements, &xzbbox);
+    let explicit_water_mask: CoordinateBitmap =
+        flood_fill_cache.collect_explicit_water_mask(&elements, &xzbbox);
+    let road_mask: CoordinateBitmap =
+        highways::collect_ground_highway_mask(&elements, &xzbbox, args.scale);
 
     // Collect building centroids for urban ground generation (only if enabled)
     // This must be done before the processing loop clears the flood fill cache
@@ -77,6 +83,13 @@ pub fn generate_world_with_options(
     } else {
         Vec::new()
     };
+
+    let urban_lookup = if args.city_boundaries && !building_centroids.is_empty() {
+        urban_ground::compute_urban_ground_lookup(building_centroids.clone(), &xzbbox)
+    } else {
+        urban_ground::UrbanGroundLookup::empty()
+    };
+    let has_urban_ground = !urban_lookup.is_empty();
 
     // Process all elements (no longer need to partition boundaries)
     let elements_count: usize = elements.len();
@@ -116,6 +129,22 @@ pub fn generate_world_with_options(
         }
         outlines
     };
+
+    let coastline_ways: Vec<_> = elements
+        .iter()
+        .filter_map(|element| match element {
+            ProcessedElement::Way(way)
+                if way
+                    .tags
+                    .get("natural")
+                    .map(|v| v == "coastline")
+                    .unwrap_or(false) =>
+            {
+                Some(way.clone())
+            }
+            _ => None,
+        })
+        .collect();
 
     // Process all elements
     for element in elements.into_iter() {
@@ -177,6 +206,13 @@ pub fn generate_world_with_options(
                     // Water ways use scanline rasterization (same as water relations)
                     // instead of the flood-fill approach, which fails on concave polygons
                     water_areas::generate_water_area_from_way(&mut editor, way, &xzbbox);
+                } else if way
+                    .tags
+                    .get("natural")
+                    .map(|v| v == "coastline")
+                    .unwrap_or(false)
+                {
+                    // Coastlines are handled in a dedicated ocean pass after element processing.
                 } else if way.tags.contains_key("natural") {
                     natural::generate_natural(
                         &mut editor,
@@ -323,15 +359,42 @@ pub fn generate_world_with_options(
 
     process_pb.finish();
 
-    // Compute urban ground lookup (if enabled)
-    // Uses a compact cell-based representation instead of storing all coordinates.
-    // Memory usage: ~270 KB vs ~560 MB for coordinate-based approach.
-    let urban_lookup = if args.city_boundaries && !building_centroids.is_empty() {
-        urban_ground::compute_urban_ground_lookup(building_centroids, &xzbbox)
+    // Render oceans after element processing so coastlines do not get treated as
+    // generic natural polygons, while still preserving deliberately placed
+    // structures that already occupy the same surface blocks.
+    let used_external_land_polygons = if let Some(path) = args.land_polygons.as_deref() {
+        match crate::land_polygons::generate_oceans_from_land_polygons(
+            &mut editor,
+            path,
+            &llbbox,
+            &xzbbox,
+            args.scale,
+        ) {
+            Ok(generated) => generated,
+            Err(err) => {
+                eprintln!(
+                    "Warning: failed to use external land polygons ({}). Falling back to coastline inference.",
+                    err
+                );
+                false
+            }
+        }
     } else {
-        urban_ground::UrbanGroundLookup::empty()
+        false
     };
-    let has_urban_ground = !urban_lookup.is_empty();
+
+    if !used_external_land_polygons {
+        oceans::generate_oceans(
+            &mut editor,
+            &coastline_ways,
+            &xzbbox,
+            &dry_land_mask,
+            &road_mask,
+            &building_footprints,
+            &explicit_water_mask,
+            &urban_lookup,
+        );
+    }
 
     // Drop remaining caches
     drop(highway_connectivity);
@@ -392,23 +455,56 @@ pub fn generate_world_with_options(
 
                     // Check if this coordinate is in an urban area (O(1) lookup)
                     let is_urban = has_urban_ground && urban_lookup.is_urban(x, z);
+                    let has_surface_water =
+                        editor.check_for_block_absolute(x, ground_y, z, Some(&[WATER]), None);
+                    let explicit_reclaim = dry_land_mask.contains(x, z);
+                    let soft_reclaim = road_mask.contains(x, z)
+                        || (is_urban && !explicit_water_mask.contains(x, z));
+                    let adjacent_surface_water = if used_external_land_polygons && soft_reclaim {
+                        (-1..=1).any(|dx| {
+                            (-1..=1).any(|dz| {
+                                (dx != 0 || dz != 0)
+                                    && editor.check_for_block_absolute(
+                                        x + dx,
+                                        ground_y,
+                                        z + dz,
+                                        Some(&[WATER]),
+                                        None,
+                                    )
+                            })
+                        })
+                    } else {
+                        false
+                    };
+                    let reclaim_dry_land = explicit_reclaim
+                        || (soft_reclaim
+                            && !(used_external_land_polygons
+                                && (has_surface_water || adjacent_surface_water)));
+                    let surface_block = if is_urban { SMOOTH_STONE } else { GRASS_BLOCK };
+
+                    if reclaim_dry_land {
+                        editor.set_block_absolute(
+                            surface_block,
+                            x,
+                            ground_y,
+                            z,
+                            Some(&[WATER]),
+                            None,
+                        );
+                        editor.set_block_absolute(DIRT, x, ground_y - 1, z, Some(&[WATER]), None);
+                        editor.set_block_absolute(DIRT, x, ground_y - 2, z, Some(&[WATER]), None);
+                    }
 
                     // Add default dirt and grass layer if there isn't a stone layer already
                     if !editor.check_for_block_absolute(x, ground_y, z, Some(&[STONE]), None) {
-                        if is_urban {
-                            // Urban area: smooth stone ground
-                            editor.set_block_if_absent_absolute(SMOOTH_STONE, x, ground_y, z);
-                        } else {
-                            // Rural/natural area: grass and dirt
-                            editor.set_block_if_absent_absolute(GRASS_BLOCK, x, ground_y, z);
-                        }
+                        editor.set_block_if_absent_absolute(surface_block, x, ground_y, z);
                         editor.set_block_if_absent_absolute(DIRT, x, ground_y - 1, z);
                         editor.set_block_if_absent_absolute(DIRT, x, ground_y - 2, z);
                     }
 
                     // Fill water for areas at or below sea level (DHM terrain)
                     if let Some(sly) = sea_level_y {
-                        if ground_y < sly {
+                        if ground_y < sly && !reclaim_dry_land && has_surface_water {
                             // Fill water from ground surface up to sea level
                             for wy in (ground_y + 1)..=sly {
                                 editor.set_block_if_absent_absolute(WATER, x, wy, z);

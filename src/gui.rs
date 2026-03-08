@@ -881,6 +881,7 @@ fn gui_start_generation(
             let args: Args = Args {
                 bbox,
                 file: None,
+                land_polygons: None,
                 save_json_file: None,
                 path: Some(if world_format == WorldFormat::JavaAnvil {
                     generation_path
