@@ -62,6 +62,7 @@ pub fn fetch_dhm_elevation(
     scale: f64,
     ground_level: i32,
     token: &str,
+    debug: bool,
 ) -> Result<ElevationData, Box<dyn std::error::Error>> {
     println!("{}", "Fetching DHM high-resolution terrain...".bold());
     emit_gui_progress_update(12.0, "Fetching DHM terrain data...");
@@ -142,6 +143,9 @@ pub fn fetch_dhm_elevation(
 
                 if !status.is_success() {
                     let body = resp.text().unwrap_or_default();
+                    if status == reqwest::StatusCode::FORBIDDEN && debug {
+                        print_dhm_auth_debug(token, &url);
+                    }
                     return Err(format!(
                         "DHM WCS returned status {status}: {}",
                         &body[..body.len().min(500)]
@@ -311,6 +315,33 @@ pub fn fetch_dhm_elevation(
     })
 }
 
+fn print_dhm_auth_debug(token: &str, url: &str) {
+    let trimmed = token.trim();
+    let leading_or_trailing_whitespace = trimmed.len() != token.len();
+    let contains_internal_whitespace = trimmed.chars().any(char::is_whitespace);
+
+    eprintln!("DHM auth debug:");
+    eprintln!("  token present: {}", !token.is_empty());
+    eprintln!("  token length: {}", token.len());
+    eprintln!("  trimmed token length: {}", trimmed.len());
+    eprintln!(
+        "  leading/trailing whitespace removed by trim: {}",
+        leading_or_trailing_whitespace
+    );
+    eprintln!(
+        "  token contains whitespace after trim: {}",
+        contains_internal_whitespace
+    );
+    eprintln!("  request URL: {}", redact_dhm_token(url));
+}
+
+fn redact_dhm_token(url: &str) -> String {
+    match url.split_once("&token=") {
+        Some((prefix, _)) => format!("{prefix}&token=<redacted>"),
+        None => url.to_string(),
+    }
+}
+
 fn dhm_gaussian_blur(grid: &[Vec<f64>], sigma: f64) -> Vec<Vec<f64>> {
     let h = grid.len();
     if h == 0 {
@@ -360,3 +391,5 @@ fn dhm_gaussian_blur(grid: &[Vec<f64>], sigma: f64) -> Vec<Vec<f64>> {
 
     result
 }
+
+
