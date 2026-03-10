@@ -1,9 +1,12 @@
 use crate::coordinate_system::geographic::LLBBox;
 use crate::coordinate_system::transformation::geo_distance;
 use crate::elevation_data::ElevationData;
-use crate::progress::emit_gui_progress_update;
+use crate::progress::{emit_gui_progress_update, is_running_with_gui};
 use colored::Colorize;
+use indicatif::{ProgressBar, ProgressStyle};
+use rayon::prelude::*;
 use reqwest::blocking::Client;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 /// Convert WGS84 (lat, lon) to ETRS89/UTM32N (easting, northing).
@@ -29,8 +32,7 @@ fn wgs84_to_utm32n(lat: f64, lon: f64) -> (f64, f64) {
     let e2_3 = e2_2 * e2;
     let m = a
         * ((1.0 - e2 / 4.0 - 3.0 * e2_2 / 64.0 - 5.0 * e2_3 / 256.0) * lat_rad
-            - (3.0 * e2 / 8.0 + 3.0 * e2_2 / 32.0 + 45.0 * e2_3 / 1024.0)
-                * (2.0 * lat_rad).sin()
+            - (3.0 * e2 / 8.0 + 3.0 * e2_2 / 32.0 + 45.0 * e2_3 / 1024.0) * (2.0 * lat_rad).sin()
             + (15.0 * e2_2 / 256.0 + 45.0 * e2_3 / 1024.0) * (4.0 * lat_rad).sin()
             - (35.0 * e2_3 / 3072.0) * (6.0 * lat_rad).sin());
 
@@ -38,8 +40,7 @@ fn wgs84_to_utm32n(lat: f64, lon: f64) -> (f64, f64) {
         * n
         * (a_coeff
             + (1.0 - t * t + c) * a_coeff.powi(3) / 6.0
-            + (5.0 - 18.0 * t * t + t.powi(4) + 72.0 * c - 58.0 * e_prime2)
-                * a_coeff.powi(5)
+            + (5.0 - 18.0 * t * t + t.powi(4) + 72.0 * c - 58.0 * e_prime2) * a_coeff.powi(5)
                 / 120.0)
         + 500000.0;
 
@@ -236,7 +237,9 @@ pub fn fetch_dhm_elevation(
     let grid_size = (grid_width.min(grid_height) as f64).max(1.0);
     let sigma = 7.0 * (grid_size / 100.0).sqrt();
     println!("Smoothing DHM terrain (sigma={:.1})...", sigma);
+    emit_gui_progress_update(16.0, "Smoothing DHM terrain... 0%");
     let height_grid = dhm_gaussian_blur(&height_grid, sigma);
+    emit_gui_progress_update(19.5, "Smoothing DHM terrain... 100%");
 
     let mut min_h = f64::MAX;
     let mut max_h = f64::MIN;
@@ -342,6 +345,42 @@ fn redact_dhm_token(url: &str) -> String {
     }
 }
 
+fn emit_dhm_smoothing_progress(
+    completed_units: usize,
+    total_units: usize,
+    last_bucket: &AtomicUsize,
+    progress_bar: Option<&ProgressBar>,
+) {
+    if total_units == 0 {
+        return;
+    }
+
+    if let Some(progress_bar) = progress_bar {
+        progress_bar.set_position(completed_units as u64);
+    }
+
+    let ratio = completed_units as f64 / total_units as f64;
+    let percent = (ratio * 100.0).round().clamp(0.0, 100.0) as usize;
+    let bucket = percent / 2;
+    let previous = last_bucket.load(Ordering::Relaxed);
+
+    if bucket > previous
+        && last_bucket
+            .compare_exchange(previous, bucket, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+    {
+        let gui_progress = 16.0 + ratio * 3.5;
+        emit_gui_progress_update(
+            gui_progress,
+            &format!("Smoothing DHM terrain... {percent}%"),
+        );
+
+        if !is_running_with_gui() && percent > 0 && percent < 100 && percent.is_multiple_of(10) {
+            println!("Smoothing DHM terrain... {percent}%");
+        }
+    }
+}
+
 fn dhm_gaussian_blur(grid: &[Vec<f64>], sigma: f64) -> Vec<Vec<f64>> {
     let h = grid.len();
     if h == 0 {
@@ -363,33 +402,83 @@ fn dhm_gaussian_blur(grid: &[Vec<f64>], sigma: f64) -> Vec<Vec<f64>> {
         *value /= sum;
     }
 
-    let mut temp = vec![vec![0.0f64; w]; h];
-    for y in 0..h {
-        for x in 0..w {
-            let mut acc = 0.0;
-            for k in 0..kernel_size {
-                let sx =
-                    (x as isize + k as isize - radius as isize).clamp(0, w as isize - 1) as usize;
-                acc += grid[y][sx] * kernel[k];
+    let total_units = h + w;
+    let completed_units = AtomicUsize::new(0);
+    let last_progress_bucket = AtomicUsize::new(0);
+    let progress_bar = if is_running_with_gui() {
+        None
+    } else {
+        let progress_bar = ProgressBar::new(total_units as u64);
+        progress_bar.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:45.cyan/blue}] {pos}/{len} smoothing units ({percent}%)")
+                .unwrap()
+                .progress_chars("#> "),
+        );
+        progress_bar.set_message("Smoothing DHM terrain");
+        Some(progress_bar)
+    };
+
+    let temp: Vec<Vec<f64>> = grid
+        .par_iter()
+        .map(|row| {
+            let mut temp_row = vec![0.0f64; w];
+            for (x, value) in temp_row.iter_mut().enumerate() {
+                let mut acc = 0.0;
+                for (k, kernel_value) in kernel.iter().enumerate() {
+                    let sx = (x as isize + k as isize - radius as isize).clamp(0, w as isize - 1)
+                        as usize;
+                    acc += row[sx] * kernel_value;
+                }
+                *value = acc;
             }
-            temp[y][x] = acc;
-        }
+
+            let completed = completed_units.fetch_add(1, Ordering::Relaxed) + 1;
+            emit_dhm_smoothing_progress(
+                completed,
+                total_units,
+                &last_progress_bucket,
+                progress_bar.as_ref(),
+            );
+            temp_row
+        })
+        .collect();
+
+    let blurred_columns: Vec<Vec<f64>> = (0..w)
+        .into_par_iter()
+        .map(|x| {
+            let mut blurred_column = vec![0.0f64; h];
+            for (y, value) in blurred_column.iter_mut().enumerate() {
+                let mut acc = 0.0;
+                for (k, kernel_value) in kernel.iter().enumerate() {
+                    let sy = (y as isize + k as isize - radius as isize).clamp(0, h as isize - 1)
+                        as usize;
+                    acc += temp[sy][x] * kernel_value;
+                }
+                *value = acc;
+            }
+
+            let completed = completed_units.fetch_add(1, Ordering::Relaxed) + 1;
+            emit_dhm_smoothing_progress(
+                completed,
+                total_units,
+                &last_progress_bucket,
+                progress_bar.as_ref(),
+            );
+            blurred_column
+        })
+        .collect();
+
+    if let Some(progress_bar) = &progress_bar {
+        progress_bar.finish_with_message("Smoothing DHM terrain... done");
     }
 
     let mut result = vec![vec![0.0f64; w]; h];
-    for y in 0..h {
-        for x in 0..w {
-            let mut acc = 0.0;
-            for k in 0..kernel_size {
-                let sy =
-                    (y as isize + k as isize - radius as isize).clamp(0, h as isize - 1) as usize;
-                acc += temp[sy][x] * kernel[k];
-            }
-            result[y][x] = acc;
+    for (x, column) in blurred_columns.into_iter().enumerate() {
+        for (y, value) in column.into_iter().enumerate() {
+            result[y][x] = value;
         }
     }
 
     result
 }
-
-

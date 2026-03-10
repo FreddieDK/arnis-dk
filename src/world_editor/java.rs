@@ -141,61 +141,81 @@ impl<'a> WorldEditor<'a> {
 
     /// Saves a single region to disk.
     ///
-    /// Optimized for new world creation, writes chunks directly without reading existing data.
-    /// This assumes we're creating a fresh world, not modifying an existing one.
+    /// Preserves existing chunks so repeated generation passes can write adjacent tiles into the
+    /// same world folder without erasing earlier work.
     fn save_single_region(
         &self,
         region_x: i32,
         region_z: i32,
         region_to_modify: &super::common::RegionToModify,
     ) {
+        let region_dir = self.world_dir.join("region");
+        let region_path = region_dir.join(format!("r.{}.{}.mca", region_x, region_z));
+        let existing_chunks = Self::read_existing_region_chunks(&region_path);
         let mut region = self.create_region(region_x, region_z);
         let mut ser_buffer = Vec::with_capacity(8192);
 
-        // First pass: write all chunks that have content
-        for (&(chunk_x, chunk_z), chunk_to_modify) in &region_to_modify.chunks {
-            if !chunk_to_modify.sections.is_empty() || !chunk_to_modify.other.is_empty() {
-                // Create chunk directly, we're writing to a fresh region file
-                // so there's no existing data to preserve
-                let chunk = Chunk {
-                    sections: chunk_to_modify.sections().collect(),
-                    x_pos: chunk_x + (region_x * 32),
-                    z_pos: chunk_z + (region_z * 32),
-                    is_light_on: 0,
-                    other: chunk_to_modify.other.clone(),
-                };
-
-                // Create Level wrapper and save
-                let level_data = create_level_wrapper(&chunk);
-                ser_buffer.clear();
-                fastnbt::to_writer(&mut ser_buffer, &level_data).unwrap();
-                region
-                    .write_chunk(chunk_x as usize, chunk_z as usize, &ser_buffer)
-                    .unwrap();
-            }
-        }
-
-        // Second pass: ensure all chunks exist (fill with base layer if not)
         for chunk_x in 0..32 {
             for chunk_z in 0..32 {
                 let abs_chunk_x = chunk_x + (region_x * 32);
                 let abs_chunk_z = chunk_z + (region_z * 32);
 
-                // Check if chunk exists in our modifications
-                let chunk_exists = region_to_modify.chunks.contains_key(&(chunk_x, chunk_z));
+                if let Some(chunk_to_modify) = region_to_modify.chunks.get(&(chunk_x, chunk_z)) {
+                    if !chunk_to_modify.sections.is_empty() || !chunk_to_modify.other.is_empty() {
+                        let chunk = Chunk {
+                            sections: chunk_to_modify.sections().collect(),
+                            x_pos: abs_chunk_x,
+                            z_pos: abs_chunk_z,
+                            is_light_on: 0,
+                            other: chunk_to_modify.other.clone(),
+                        };
 
-                // If chunk doesn't exist, create it with base layer
-                if !chunk_exists {
-                    let (ser_buffer, _) = Self::create_base_chunk(abs_chunk_x, abs_chunk_z);
+                        let level_data = create_level_wrapper(&chunk);
+                        ser_buffer.clear();
+                        fastnbt::to_writer(&mut ser_buffer, &level_data).unwrap();
+                        region
+                            .write_chunk(chunk_x as usize, chunk_z as usize, &ser_buffer)
+                            .unwrap();
+                        continue;
+                    }
+                }
+
+                if let Some(existing_chunk) = existing_chunks.get(&(chunk_x, chunk_z)) {
                     region
-                        .write_chunk(chunk_x as usize, chunk_z as usize, &ser_buffer)
+                        .write_chunk(chunk_x as usize, chunk_z as usize, existing_chunk)
+                        .unwrap();
+                } else {
+                    let (base_chunk, _) = Self::create_base_chunk(abs_chunk_x, abs_chunk_z);
+                    region
+                        .write_chunk(chunk_x as usize, chunk_z as usize, &base_chunk)
                         .unwrap();
                 }
             }
         }
     }
-}
 
+    fn read_existing_region_chunks(region_path: &std::path::Path) -> HashMap<(i32, i32), Vec<u8>> {
+        let mut chunks = HashMap::new();
+
+        let Ok(file) = File::open(region_path) else {
+            return chunks;
+        };
+        let Ok(mut region) = Region::from_stream(file) else {
+            return chunks;
+        };
+
+        for chunk_x in 0..32 {
+            for chunk_z in 0..32 {
+                if let Ok(Some(chunk_data)) = region.read_chunk(chunk_x as usize, chunk_z as usize)
+                {
+                    chunks.insert((chunk_x, chunk_z), chunk_data);
+                }
+            }
+        }
+
+        chunks
+    }
+}
 /// Helper function to get entity coordinates
 /// Note: Currently unused since we write directly without merging, but kept for potential future use
 #[inline]

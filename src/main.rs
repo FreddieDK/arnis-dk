@@ -1,7 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod args;
-mod dhm;
 #[cfg(feature = "bedrock")]
 mod bedrock_block_map;
 mod block_definitions;
@@ -11,12 +10,14 @@ mod colors;
 mod coordinate_system;
 mod data_processing;
 mod deterministic_rng;
+mod dhm;
 mod element_processing;
 mod elevation_data;
 mod floodfill;
 mod floodfill_cache;
 mod ground;
 mod land_polygons;
+mod large_area;
 mod map_renderer;
 mod map_transformation;
 mod osm_parser;
@@ -35,8 +36,10 @@ mod world_utils;
 use args::Args;
 use clap::Parser;
 use colored::*;
+use coordinate_system::transformation::CoordTransformer;
 use std::path::PathBuf;
 use std::{env, fs, io::Write};
+use world_editor::WorldFormat;
 
 #[cfg(feature = "gui")]
 mod gui;
@@ -54,6 +57,143 @@ mod progress {
 }
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Console::{AttachConsole, FreeConsole, ATTACH_PARENT_PROCESS};
+
+fn tile_output_path(
+    base_path: Option<&str>,
+    tile_index: usize,
+    total_tiles: usize,
+) -> Option<String> {
+    let base_path = base_path?;
+    if total_tiles <= 1 {
+        return Some(base_path.to_string());
+    }
+
+    if let Some(dot_index) = base_path.rfind('.') {
+        Some(format!(
+            "{}-tile-{:02}-of-{:02}{}",
+            &base_path[..dot_index],
+            tile_index,
+            total_tiles,
+            &base_path[dot_index..]
+        ))
+    } else {
+        Some(format!(
+            "{}-tile-{:02}-of-{:02}",
+            base_path, tile_index, total_tiles
+        ))
+    }
+}
+
+fn write_debug_osm_dump(
+    parsed_elements: &[osm_parser::ProcessedElement],
+    tile_index: usize,
+    total_tiles: usize,
+) {
+    let filename = if total_tiles > 1 {
+        format!("parsed_osm_data_tile_{tile_index:02}_of_{total_tiles:02}.txt")
+    } else {
+        "parsed_osm_data.txt".to_string()
+    };
+
+    let mut buf =
+        std::io::BufWriter::new(fs::File::create(&filename).expect("Failed to create output file"));
+    for element in parsed_elements {
+        writeln!(
+            buf,
+            "Element ID: {}, Type: {}, Tags: {:?}",
+            element.id(),
+            element.kind(),
+            element.tags(),
+        )
+        .expect("Failed to write to output file");
+    }
+}
+
+fn run_cli_job(
+    args: &Args,
+    job_bbox: coordinate_system::geographic::LLBBox,
+    target_xzbbox: Option<coordinate_system::cartesian::XZBBox>,
+    full_transformer: Option<&CoordTransformer>,
+    generation_path: &PathBuf,
+    world_format: WorldFormat,
+    level_name: Option<String>,
+    tile_index: usize,
+    total_tiles: usize,
+    save_json_path: Option<&str>,
+) -> Result<(), String> {
+    let raw_data = match &args.file {
+        Some(file) => retrieve_data::fetch_data_from_file(file).map_err(|e| e.to_string())?,
+        None => retrieve_data::fetch_data_from_overpass(
+            job_bbox,
+            args.debug,
+            args.downloader.as_str(),
+            save_json_path,
+        )
+        .map_err(|e| e.to_string())?,
+    };
+
+    let mut job_args = Args {
+        bbox: job_bbox,
+        file: args.file.clone(),
+        land_polygons: args.land_polygons.clone(),
+        save_json_file: save_json_path.map(str::to_string),
+        path: Some(generation_path.clone()),
+        bedrock: args.bedrock,
+        downloader: args.downloader.clone(),
+        scale: args.scale,
+        ground_level: args.ground_level,
+        terrain: args.terrain,
+        interior: args.interior,
+        roof: args.roof,
+        fillground: args.fillground,
+        city_boundaries: args.city_boundaries,
+        dhm_token: args.dhm_token.clone(),
+        debug: args.debug,
+        timeout: args.timeout,
+    };
+
+    let mut ground = ground::generate_ground_data(&job_args);
+
+    let (mut parsed_elements, mut xzbbox) = match (target_xzbbox, full_transformer) {
+        (Some(tile_xzbbox), Some(transformer)) => osm_parser::parse_osm_data_with_transformer(
+            raw_data,
+            transformer,
+            tile_xzbbox,
+            args.debug,
+        ),
+        _ => osm_parser::parse_osm_data(raw_data, job_bbox, args.scale, args.debug),
+    };
+    parsed_elements
+        .sort_by_key(|element: &osm_parser::ProcessedElement| osm_parser::get_priority(element));
+
+    if args.debug {
+        write_debug_osm_dump(&parsed_elements, tile_index, total_tiles);
+    }
+
+    map_transformation::transform_map(&mut parsed_elements, &mut xzbbox, &mut ground);
+
+    let generation_options = data_processing::GenerationOptions {
+        path: generation_path.clone(),
+        format: world_format,
+        level_name,
+        spawn_point: None,
+        update_spawn_after_generation: true,
+    };
+
+    data_processing::generate_world_with_options(
+        parsed_elements,
+        xzbbox,
+        job_bbox,
+        ground,
+        &job_args,
+        generation_options,
+    )?;
+
+    // Keep the args path pointed at the generated world in case GUI-specific code is compiled in.
+    job_args.path = Some(generation_path.clone());
+
+    Ok(())
+}
 
 fn run_cli() {
     // Configure thread pool with 90% CPU cap to keep system responsive
@@ -83,7 +223,6 @@ fn run_cli() {
         repository.bright_white().bold()
     );
 
-    // Check for updates
     if let Err(e) = version_check::check_for_updates() {
         eprintln!(
             "{}: {}",
@@ -92,16 +231,13 @@ fn run_cli() {
         );
     }
 
-    // Parse input arguments
     let args: Args = Args::parse();
 
-    // Validate arguments (path requirements differ between Java and Bedrock)
     if let Err(e) = args::validate_args(&args) {
         eprintln!("{}: {}", "Error".red().bold(), e);
         std::process::exit(1);
     }
 
-    // Early guard: --bedrock requires the bedrock cargo feature
     if args.bedrock && !cfg!(feature = "bedrock") {
         eprintln!(
             "{}: The --bedrock flag requires the 'bedrock' feature. Rebuild with: cargo build --features bedrock",
@@ -110,16 +246,13 @@ fn run_cli() {
         std::process::exit(1);
     }
 
-    // Determine world format and output path
     let world_format = if args.bedrock {
-        world_editor::WorldFormat::BedrockMcWorld
+        WorldFormat::BedrockMcWorld
     } else {
-        world_editor::WorldFormat::JavaAnvil
+        WorldFormat::JavaAnvil
     };
 
-    // Build the generation output path and level name
     let (generation_path, level_name) = if args.bedrock {
-        // Bedrock: generate .mcworld file in user-specified path or Desktop
         let output_dir = args
             .path
             .clone()
@@ -127,7 +260,6 @@ fn run_cli() {
         let (output_path, lvl_name) = world_utils::build_bedrock_output(&args.bbox, output_dir);
         (output_path, Some(lvl_name))
     } else {
-        // Java: create a new world in the provided output directory
         let base_dir = args.path.clone().unwrap();
         let world_path = match world_utils::create_new_world(&base_dir) {
             Ok(path) => PathBuf::from(path),
@@ -143,93 +275,93 @@ fn run_cli() {
         (world_path, None)
     };
 
-    // Fetch data
-    let raw_data = match &args.file {
-        Some(file) => retrieve_data::fetch_data_from_file(file),
-        None => retrieve_data::fetch_data_from_overpass(
-            args.bbox,
-            args.debug,
-            args.downloader.as_str(),
-            args.save_json_file.as_deref(),
-        ),
-    }
-    .expect("Failed to fetch data");
+    if !args.bedrock {
+        let max_job_dimension = large_area::MAX_JOB_DIMENSION_BLOCKS;
+        let plan = match large_area::build_generation_plan(args.bbox, args.scale) {
+            Ok(plan) => plan,
+            Err(e) => {
+                eprintln!("{} {}", "Error:".red().bold(), e);
+                std::process::exit(1);
+            }
+        };
+        let (full_transformer, _) = CoordTransformer::llbbox_to_xzbbox(&args.bbox, args.scale)
+            .expect("Failed to build full-area coordinate transformer");
 
-    let mut ground = ground::generate_ground_data(&args);
-
-    // Parse raw data
-    let (mut parsed_elements, mut xzbbox) =
-        osm_parser::parse_osm_data(raw_data, args.bbox, args.scale, args.debug);
-    parsed_elements
-        .sort_by_key(|element: &osm_parser::ProcessedElement| osm_parser::get_priority(element));
-
-    // Write the parsed OSM data to a file for inspection
-    if args.debug {
-        let mut buf = std::io::BufWriter::new(
-            fs::File::create("parsed_osm_data.txt").expect("Failed to create output file"),
-        );
-        for element in &parsed_elements {
-            writeln!(
-                buf,
-                "Element ID: {}, Type: {}, Tags: {:?}",
-                element.id(),
-                element.kind(),
-                element.tags(),
-            )
-            .expect("Failed to write to output file");
+        if plan.requires_tiling() {
+            println!(
+                "{} Splitting selection into {} jobs (max tile: {} x {} blocks, full bounds: {} x {} blocks)",
+                "Info:".bright_white().bold(),
+                plan.tiles.len(),
+                max_job_dimension,
+                max_job_dimension,
+                plan.full_xzbbox.bounding_rect().total_blocks_x(),
+                plan.full_xzbbox.bounding_rect().total_blocks_z()
+            );
         }
-    }
 
-
-    // Transform map (parsed_elements). Operations are defined in a json file
-    map_transformation::transform_map(&mut parsed_elements, &mut xzbbox, &mut ground);
-
-    // Build generation options
-    let generation_options = data_processing::GenerationOptions {
-        path: generation_path.clone(),
-        format: world_format,
-        level_name,
-        spawn_point: None,
-    };
-
-    // Generate world
-    match data_processing::generate_world_with_options(
-        parsed_elements,
-        xzbbox,
-        args.bbox,
-        ground,
-        &args,
-        generation_options,
-    ) {
-        Ok(_) => {
-            if args.bedrock {
+        for tile in &plan.tiles {
+            if plan.requires_tiling() {
                 println!(
-                    "{} Bedrock world saved to: {}",
-                    "Done!".green().bold(),
-                    generation_path.display()
+                    "{} Generating tile {}/{}...",
+                    "[tile]".bold(),
+                    tile.index,
+                    tile.total
                 );
             }
+
+            let save_json_path =
+                tile_output_path(args.save_json_file.as_deref(), tile.index, tile.total);
+            if let Err(e) = run_cli_job(
+                &args,
+                tile.llbbox,
+                Some(tile.xzbbox.clone()),
+                Some(&full_transformer),
+                &generation_path,
+                world_format,
+                level_name.clone(),
+                tile.index,
+                tile.total,
+                save_json_path.as_deref(),
+            ) {
+                eprintln!("{} {}", "Error:".red().bold(), e);
+                std::process::exit(1);
+            }
         }
-        Err(e) => {
-            eprintln!("{} {}", "Error:".red().bold(), e);
-            std::process::exit(1);
-        }
+    } else if let Err(e) = run_cli_job(
+        &args,
+        args.bbox,
+        None,
+        None,
+        &generation_path,
+        world_format,
+        level_name,
+        1,
+        1,
+        args.save_json_file.as_deref(),
+    ) {
+        eprintln!("{} {}", "Error:".red().bold(), e);
+        std::process::exit(1);
+    }
+
+    if args.bedrock {
+        println!(
+            "{} Bedrock world saved to: {}",
+            "Done!".green().bold(),
+            generation_path.display()
+        );
     }
 }
 
 fn main() {
-    // If on Windows, free and reattach to the parent console when using as a CLI tool
-    // Either of these can fail, but if they do it is not an issue, so the return value is ignored
     #[cfg(target_os = "windows")]
     unsafe {
         let _ = FreeConsole();
         let _ = AttachConsole(ATTACH_PARENT_PROCESS);
     }
 
-    // Only run CLI mode if the user supplied args.
     #[cfg(feature = "gui")]
     {
-        let gui_mode = std::env::args().len() == 1; // Just "arnis" with no args
+        let gui_mode = std::env::args().len() == 1;
         if gui_mode {
             gui::run_gui();
         }
@@ -237,6 +369,3 @@ fn main() {
 
     run_cli();
 }
-
-
-

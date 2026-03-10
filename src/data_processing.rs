@@ -27,6 +27,7 @@ pub struct GenerationOptions {
     pub format: WorldFormat,
     pub level_name: Option<String>,
     pub spawn_point: Option<(i32, i32)>,
+    pub update_spawn_after_generation: bool,
 }
 
 /// Generate world with explicit format options (used by GUI for Bedrock support)
@@ -573,7 +574,7 @@ pub fn generate_world_with_options(
 
     // Update player spawn Y coordinate based on terrain height after generation
     #[cfg(feature = "gui")]
-    if world_format == WorldFormat::JavaAnvil {
+    if options.update_spawn_after_generation && world_format == WorldFormat::JavaAnvil {
         use crate::gui::update_player_spawn_y_after_generation;
         // Reconstruct bbox string to match the format that GUI originally provided.
         // This ensures LLBBox::from_str() can parse it correctly.

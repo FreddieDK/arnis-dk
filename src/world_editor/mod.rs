@@ -49,7 +49,7 @@ pub enum WorldFormat {
 }
 
 /// Metadata saved with the world
-#[derive(Serialize)]
+#[derive(Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WorldMetadata {
     pub min_mc_x: i32,
@@ -785,6 +785,32 @@ impl<'a> WorldEditor<'a> {
     pub(crate) fn save_metadata(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let metadata_path = self.world_dir.join("metadata.json");
 
+        let mut metadata = WorldMetadata {
+            min_mc_x: self.xzbbox.min_x(),
+            max_mc_x: self.xzbbox.max_x(),
+            min_mc_z: self.xzbbox.min_z(),
+            max_mc_z: self.xzbbox.max_z(),
+            min_geo_lat: self.llbbox.min().lat(),
+            max_geo_lat: self.llbbox.max().lat(),
+            min_geo_lon: self.llbbox.min().lng(),
+            max_geo_lon: self.llbbox.max().lng(),
+        };
+
+        if metadata_path.exists() {
+            if let Ok(existing_contents) = std::fs::read_to_string(&metadata_path) {
+                if let Ok(existing) = serde_json::from_str::<WorldMetadata>(&existing_contents) {
+                    metadata.min_mc_x = metadata.min_mc_x.min(existing.min_mc_x);
+                    metadata.max_mc_x = metadata.max_mc_x.max(existing.max_mc_x);
+                    metadata.min_mc_z = metadata.min_mc_z.min(existing.min_mc_z);
+                    metadata.max_mc_z = metadata.max_mc_z.max(existing.max_mc_z);
+                    metadata.min_geo_lat = metadata.min_geo_lat.min(existing.min_geo_lat);
+                    metadata.max_geo_lat = metadata.max_geo_lat.max(existing.max_geo_lat);
+                    metadata.min_geo_lon = metadata.min_geo_lon.min(existing.min_geo_lon);
+                    metadata.max_geo_lon = metadata.max_geo_lon.max(existing.max_geo_lon);
+                }
+            }
+        }
+
         let mut file = File::create(&metadata_path).map_err(|e| {
             format!(
                 "Failed to create metadata file at {}: {}",
@@ -792,18 +818,6 @@ impl<'a> WorldEditor<'a> {
                 e
             )
         })?;
-
-        let metadata = WorldMetadata {
-            min_mc_x: self.xzbbox.min_x(),
-            max_mc_x: self.xzbbox.max_x(),
-            min_mc_z: self.xzbbox.min_z(),
-            max_mc_z: self.xzbbox.max_z(),
-
-            min_geo_lat: self.llbbox.min().lat(),
-            max_geo_lat: self.llbbox.max().lat(),
-            min_geo_lon: self.llbbox.min().lng(),
-            max_geo_lon: self.llbbox.max().lng(),
-        };
 
         let contents = serde_json::to_string(&metadata)
             .map_err(|e| format!("Failed to serialize metadata to JSON: {}", e))?;

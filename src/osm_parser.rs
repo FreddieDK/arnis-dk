@@ -174,18 +174,27 @@ pub fn parse_osm_data(
     scale: f64,
     debug: bool,
 ) -> (Vec<ProcessedElement>, XZBBox) {
-    println!("{} Parsing data...", "[2/7]".bold());
-    println!("Bounding box: {bbox:?}");
-    emit_gui_progress_update(5.0, "Parsing data...");
-
-    // Deserialize the JSON data into the OSMData structure
-    let data = SplitOsmData::from_raw_osm_data(osm_data);
-
     let (coord_transformer, xzbbox) = CoordTransformer::llbbox_to_xzbbox(&bbox, scale)
         .unwrap_or_else(|e| {
             eprintln!("Error in defining coordinate transformation:\n{e}");
             panic!();
         });
+
+    parse_osm_data_with_transformer(osm_data, &coord_transformer, xzbbox, debug)
+}
+
+pub fn parse_osm_data_with_transformer(
+    osm_data: OsmData,
+    coord_transformer: &CoordTransformer,
+    xzbbox: XZBBox,
+    debug: bool,
+) -> (Vec<ProcessedElement>, XZBBox) {
+    println!("{} Parsing data...", "[2/7]".bold());
+    println!("Bounding box: {xzbbox}");
+    emit_gui_progress_update(5.0, "Parsing data...");
+
+    // Deserialize the JSON data into the OSMData structure
+    let data = SplitOsmData::from_raw_osm_data(osm_data);
 
     if debug {
         println!("Total elements: {}", data.total_count());
