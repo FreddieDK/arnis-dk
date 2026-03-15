@@ -19,6 +19,23 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub const MIN_Y: i32 = -64;
+fn build_building_buffer_mask(
+    centroids: &[(i32, i32)],
+    xzbbox: &XZBBox,
+    radius: i32,
+) -> CoordinateBitmap {
+    let mut mask = CoordinateBitmap::new(xzbbox);
+
+    for &(cx, cz) in centroids {
+        for dx in -radius..=radius {
+            for dz in -radius..=radius {
+                mask.set(cx + dx, cz + dz);
+            }
+        }
+    }
+
+    mask
+}
 
 /// Generation options that can be passed separately from CLI Args
 #[derive(Clone)]
@@ -77,13 +94,9 @@ pub fn generate_world_with_options(
     let road_mask: CoordinateBitmap =
         highways::collect_ground_highway_mask(&elements, &xzbbox, args.scale);
 
-    // Collect building centroids for urban ground generation (only if enabled)
-    // This must be done before the processing loop clears the flood fill cache
-    let building_centroids = if args.city_boundaries {
-        flood_fill_cache.collect_building_centroids(&elements)
-    } else {
-        Vec::new()
-    };
+    // Collect building centroids before the processing loop clears the flood fill cache.
+    let building_centroids = flood_fill_cache.collect_building_centroids(&elements);
+    let building_buffer_mask = build_building_buffer_mask(&building_centroids, &xzbbox, 32);
 
     let urban_lookup = if args.city_boundaries && !building_centroids.is_empty() {
         urban_ground::compute_urban_ground_lookup(building_centroids.clone(), &xzbbox)
@@ -146,6 +159,7 @@ pub fn generate_world_with_options(
             _ => None,
         })
         .collect();
+    let has_coastline_context = !coastline_ways.is_empty();
 
     // Process all elements
     for element in elements.into_iter() {
@@ -364,20 +378,29 @@ pub fn generate_world_with_options(
     // generic natural polygons, while still preserving deliberately placed
     // structures that already occupy the same surface blocks.
     let used_external_land_polygons = if let Some(path) = args.land_polygons.as_deref() {
-        match crate::land_polygons::generate_oceans_from_land_polygons(
-            &mut editor,
-            path,
-            &llbbox,
-            &xzbbox,
-            args.scale,
-        ) {
-            Ok(generated) => generated,
-            Err(err) => {
-                eprintln!(
-                    "Warning: failed to use external land polygons ({}). Falling back to coastline inference.",
-                    err
+        if coastline_ways.is_empty() {
+            if args.debug {
+                println!(
+                    "Skipping external coastline dataset because no coastline ways were found in this bbox."
                 );
-                false
+            }
+            false
+        } else {
+            match crate::land_polygons::generate_oceans_from_land_polygons(
+                &mut editor,
+                path,
+                &llbbox,
+                &xzbbox,
+                args.scale,
+            ) {
+                Ok(generated) => generated,
+                Err(err) => {
+                    eprintln!(
+                        "Warning: failed to use external land polygons ({}). Falling back to coastline inference.",
+                        err
+                    );
+                    false
+                }
             }
         }
     } else {
@@ -427,6 +450,10 @@ pub fn generate_world_with_options(
     // Check if terrain elevation is enabled; when disabled, we can skip ground level lookups entirely
     let terrain_enabled = ground.elevation_enabled;
     let sea_level_y = ground.sea_level_y();
+    let mut debug_building_buffer_water_cells: u64 = 0;
+    let mut debug_building_buffer_explicit_water_cells: u64 = 0;
+    let mut debug_building_buffer_reclaimed_cells: u64 = 0;
+    let mut debug_building_buffer_remaining_cells: u64 = 0;
 
     // Process ground generation chunk-by-chunk for better cache locality.
     // This keeps the same region/chunk HashMap entries hot in CPU cache,
@@ -459,8 +486,13 @@ pub fn generate_world_with_options(
                     let has_surface_water =
                         editor.check_for_block_absolute(x, ground_y, z, Some(&[WATER]), None);
                     let explicit_reclaim = dry_land_mask.contains(x, z);
-                    let soft_reclaim = road_mask.contains(x, z)
-                        || (is_urban && !explicit_water_mask.contains(x, z));
+                    let building_buffer_reclaim = building_buffer_mask.contains(x, z);
+                    let respects_explicit_water = !explicit_water_mask.contains(x, z)
+                        || (!has_coastline_context && building_buffer_reclaim);
+                    let soft_reclaim = (road_mask.contains(x, z)
+                        || building_buffer_reclaim
+                        || is_urban)
+                        && respects_explicit_water;
                     let adjacent_surface_water = if used_external_land_polygons && soft_reclaim {
                         (-1..=1).any(|dx| {
                             (-1..=1).any(|dz| {
@@ -481,6 +513,17 @@ pub fn generate_world_with_options(
                         || (soft_reclaim
                             && !(used_external_land_polygons
                                 && (has_surface_water || adjacent_surface_water)));
+                    if args.debug && building_buffer_reclaim && has_surface_water {
+                        debug_building_buffer_water_cells += 1;
+                        if explicit_water_mask.contains(x, z) {
+                            debug_building_buffer_explicit_water_cells += 1;
+                        }
+                        if reclaim_dry_land {
+                            debug_building_buffer_reclaimed_cells += 1;
+                        } else {
+                            debug_building_buffer_remaining_cells += 1;
+                        }
+                    }
                     let surface_block = if is_urban { SMOOTH_STONE } else { GRASS_BLOCK };
 
                     if reclaim_dry_land {
@@ -566,6 +609,16 @@ pub fn generate_world_with_options(
 
     ground_pb.inc(block_counter % batch_size);
     ground_pb.finish();
+
+    if args.debug && debug_building_buffer_water_cells > 0 {
+        println!(
+            "Building-buffer water debug: {} wet cells near buildings, {} explicitly mapped as water, {} reclaimed, {} still wet",
+            debug_building_buffer_water_cells,
+            debug_building_buffer_explicit_water_cells,
+            debug_building_buffer_reclaimed_cells,
+            debug_building_buffer_remaining_cells
+        );
+    }
 
     // Save world
     editor.save();
@@ -678,3 +731,13 @@ pub fn start_map_preview_generation(info: MapPreviewInfo) {
         }
     });
 }
+
+
+
+
+
+
+
+
+
+

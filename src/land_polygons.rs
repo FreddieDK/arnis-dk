@@ -39,6 +39,12 @@ struct ExternalWaterPolygons {
     inners: Vec<Vec<XZPoint>>,
 }
 
+struct ClippedDatasetRing {
+    points: Vec<XZPoint>,
+    is_outer: bool,
+    touches_bbox: bool,
+}
+
 fn load_external_water_polygons(
     dataset_path: &Path,
     llbbox: &LLBBox,
@@ -61,6 +67,8 @@ fn load_external_water_polygons(
         let Shape::Polygon(polygon) = shape else {
             continue;
         };
+
+        let mut clipped_water_rings: Vec<ClippedDatasetRing> = Vec::new();
 
         for ring in polygon.rings() {
             let points = ring.points();
@@ -95,14 +103,11 @@ fn load_external_water_polygons(
                     clipped_ring.iter().map(ProcessedNode::xz).collect();
                 if ring_points.len() >= 4 {
                     match dataset_kind {
-                        DatasetKind::Water => match ring {
-                            PolygonRing::Outer(_) => polygons.outers.push(ring_points),
-                            PolygonRing::Inner(_) => {
-                                if !ring_touches_bbox(&ring_points, xzbbox) {
-                                    polygons.inners.push(ring_points);
-                                }
-                            }
-                        },
+                        DatasetKind::Water => clipped_water_rings.push(ClippedDatasetRing {
+                            touches_bbox: ring_touches_bbox(&ring_points, xzbbox),
+                            is_outer: matches!(ring, PolygonRing::Outer(_)),
+                            points: ring_points,
+                        }),
                         DatasetKind::Land => {
                             if matches!(ring, PolygonRing::Outer(_)) {
                                 land_rings.push(ring_points);
@@ -113,6 +118,10 @@ fn load_external_water_polygons(
             }
 
             record_id = record_id.wrapping_add(10_000);
+        }
+
+        if matches!(dataset_kind, DatasetKind::Water) {
+            append_boundary_connected_water_polygon(&mut polygons, clipped_water_rings);
         }
     }
 
@@ -125,6 +134,44 @@ fn load_external_water_polygons(
     }
 
     Ok(polygons)
+}
+
+fn append_boundary_connected_water_polygon(
+    polygons: &mut ExternalWaterPolygons,
+    rings: Vec<ClippedDatasetRing>,
+) {
+    if rings.is_empty() {
+        return;
+    }
+
+    let kept_outers: Vec<Vec<XZPoint>> = rings
+        .iter()
+        .filter(|ring| ring.is_outer && ring.touches_bbox)
+        .map(|ring| ring.points.clone())
+        .collect();
+
+    if kept_outers.is_empty() {
+        return;
+    }
+
+    for outer in &kept_outers {
+        polygons.outers.push(outer.clone());
+    }
+
+    for ring in rings {
+        if ring.is_outer || ring.touches_bbox {
+            continue;
+        }
+
+        if let Some(sample) = ring.points.first() {
+            if kept_outers
+                .iter()
+                .any(|outer| point_in_ring(*sample, outer.as_slice()))
+            {
+                polygons.inners.push(ring.points);
+            }
+        }
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -259,6 +306,36 @@ fn ring_touches_bbox(ring: &[XZPoint], xzbbox: &XZBBox) -> bool {
     })
 }
 
+fn point_in_ring(point: XZPoint, ring: &[XZPoint]) -> bool {
+    if ring.len() < 3 {
+        return false;
+    }
+
+    let px = point.x as f64;
+    let pz = point.z as f64;
+    let mut inside = false;
+
+    for window in ring.windows(2) {
+        let a = window[0];
+        let b = window[1];
+        let az = a.z as f64;
+        let bz = b.z as f64;
+        let crosses = (az > pz) != (bz > pz);
+        if !crosses {
+            continue;
+        }
+
+        let ax = a.x as f64;
+        let bx = b.x as f64;
+        let intersection_x = ax + (pz - az) * (bx - ax) / (bz - az);
+        if intersection_x >= px {
+            inside = !inside;
+        }
+    }
+
+    inside
+}
+
 fn bbox_ring(xzbbox: &XZBBox) -> Vec<XZPoint> {
     vec![
         XZPoint::new(xzbbox.min_x(), xzbbox.min_z()),
@@ -272,6 +349,28 @@ fn bbox_ring(xzbbox: &XZBBox) -> Vec<XZPoint> {
 #[cfg(test)]
 mod dataset_tests {
     use super::*;
+
+    #[test]
+    fn water_dataset_drops_inland_polygon_not_touching_bbox() {
+        let mut polygons = ExternalWaterPolygons::default();
+        append_boundary_connected_water_polygon(
+            &mut polygons,
+            vec![ClippedDatasetRing {
+                points: vec![
+                    XZPoint::new(20, 20),
+                    XZPoint::new(40, 20),
+                    XZPoint::new(40, 40),
+                    XZPoint::new(20, 40),
+                    XZPoint::new(20, 20),
+                ],
+                is_outer: true,
+                touches_bbox: false,
+            }],
+        );
+
+        assert!(polygons.outers.is_empty());
+        assert!(polygons.inners.is_empty());
+    }
 
     #[test]
     fn local_copenhagen_water_dataset_produces_rings() {
@@ -324,3 +423,5 @@ mod dataset_tests {
         }
     }
 }
+
+
