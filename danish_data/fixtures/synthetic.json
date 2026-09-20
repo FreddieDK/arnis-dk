@@ -1,0 +1,84 @@
+{
+  "arnis_dk": {
+    "schema": "arnis-dk.buildings/1",
+    "bbox": [
+      55,
+      11,
+      56,
+      12
+    ],
+    "at": "2026-09-20T00:00:00+00:00",
+    "sources": [
+      {
+        "register": "GeoDanmark",
+        "file": "geodk.json",
+        "sha256": "00a6ff48fdbfcb021d3bc5d26a47e51556299e0ebcbfd10e1a9729c93836fbcd"
+      },
+      {
+        "register": "BBR",
+        "file": "bbr.json",
+        "sha256": "075f3d2cd342f232e95e5df907fe624e1dc71366ab2b9f6b8bb7396a174018bf"
+      },
+      {
+        "register": "DAR",
+        "file": "dar.json",
+        "sha256": "5a71319c50caea4620779e2c00e7ebc9e0c8529a8225d9452ef0832e42ff5c76"
+      }
+    ],
+    "counts": {
+      "geodanmark_rows": 1,
+      "bbr_matches": 1,
+      "dar_matches": 1,
+      "selected_buildings": 1
+    },
+    "attribution": "GeoDanmark (Klimadatastyrelsen og kommunerne); BBR; Danmarks Adresseregister"
+  },
+  "elements": [
+    {
+      "type": "node",
+      "id": 1415282282055495332,
+      "lon": 11.373147458318154,
+      "lat": 55.47310494446771
+    },
+    {
+      "type": "node",
+      "id": 2262807643841636112,
+      "lon": 11.373305516212168,
+      "lat": 55.473101878983776
+    },
+    {
+      "type": "node",
+      "id": 1942734580580336547,
+      "lon": 11.373310913193416,
+      "lat": 55.47319165905548
+    },
+    {
+      "type": "node",
+      "id": 1809938574214862763,
+      "lon": 11.373152854940795,
+      "lat": 55.47319472454965
+    },
+    {
+      "type": "way",
+      "id": 1368332833474160913,
+      "nodes": [
+        1415282282055495332,
+        2262807643841636112,
+        1942734580580336547,
+        1809938574214862763,
+        1415282282055495332
+      ],
+      "tags": {
+        "building": "yes",
+        "arnis:geodanmark_id": "geodk-1",
+        "arnis:bbr_id": "bbr-1",
+        "building:material": "brick",
+        "roof:material": "roof_tiles",
+        "building:levels": "2",
+        "start_date": "1920",
+        "arnis:dar_id": "dar-1",
+        "addr:housenumber": "12A"
+      }
+    }
+  ]
+}

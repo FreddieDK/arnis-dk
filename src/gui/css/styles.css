@@ -17,6 +17,13 @@
   --primary-accent-light: #fff2cc;
 }
 
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
 p {
   color: #ececec;
 }
@@ -24,29 +31,31 @@ p {
 .container {
   margin: 0;
   padding-top: 1vh;
+  padding-bottom: 0.5vh;
   display: flex;
   flex-direction: column;
-  justify-content: center;
   text-align: center;
+  height: 100vh;
+  box-sizing: border-box;
 }
 
 .logo {
-  height: 6em;
-  padding-top: 0.4em;
-  padding-bottom: 0.5em;
-  will-change: filter;
+  height: 5em;
+  padding-top: 0.3em;
+  padding-bottom: 0.3em;
   transition: 0.75s;
   max-width: 950px;
   max-height: 600px;
 }
 
 .logo.arnis:hover {
-  filter: drop-shadow(0 0 2em #b3b3b3);
+  filter: drop-shadow(0 0 0.8em rgba(179, 179, 179, 0.5));
 }
 
 .row {
   display: flex;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 a {
@@ -66,7 +75,8 @@ a:hover {
   justify-content: center;
   align-items: stretch;
   margin-top: 5px;
-  min-height: 70vh;
+  min-height: 420px;
+  flex: 1;
 }
 
 .section {
@@ -126,6 +136,12 @@ a:hover {
   margin-top: 8px;
 }
 
+.secret-parrot {
+  height: 100px;
+  width: auto;
+  display: none;
+}
+
 .progress-info-text {
   font-size: 0.9em;
   color: #ececec;
@@ -134,6 +150,162 @@ a:hover {
   min-height: 1.5em;
   line-height: 1.25em;
   margin-bottom: 5px;
+}
+
+/* Time-remaining centered on the bar. White to match the percentage label; a
+   text-shadow keeps it legible over the green fill and the lighter track. */
+.progress-eta-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1;
+  color: #ffffff;
+  font-size: 0.85em;
+  line-height: 1;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85), 0 0 2px rgba(0, 0, 0, 0.7);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.progress-eta-overlay.visible {
+  opacity: 1;
+}
+
+/* Bottom strip of the start button. Deliberately paints no background of its
+   own: .start-button-wrap owns the button's fill for both colour schemes, and
+   this row is transparent on top of it, so the row and #start-button read as
+   one button. The horizontal padding mirrors .start-button's, and the 3px/11px
+   vertical split reproduces the label spacing from back when the row was still
+   nested inside the button (3px below the button text, 11px to its bottom
+   edge). */
+.world-name-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  /* No `width: 100%`: the row is a stretch item of the flex-column wrapper, so
+     it already spans it. Setting it explicitly would add the padding on top
+     (content-box is the default here) and push the row out past the settings
+     button. */
+  min-width: 0;
+  padding: 3px 20px 11px;
+  cursor: pointer;
+}
+
+.world-name-label {
+  font-size: 0.8em;
+  color: #fecc44;
+  line-height: 1;
+  min-height: 1em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+/* Inline editor for the custom world name, swapped in for .world-name-label
+   while editing. Sits inside .world-name-row (a sibling of #start-button,
+   not nested inside it), so it must not inherit the row's pointer cursor or
+   centered button text styling. */
+.world-name-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 200px;
+  font-size: 0.8em;
+  font-family: inherit;
+  line-height: 1.3;
+  color: #fecc44;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid #fecc44;
+  border-radius: 3px;
+  padding: 1px 5px;
+  margin: 0;
+  box-shadow: none;
+  outline: none;
+  cursor: text;
+  text-align: left;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+/* At the character cap the field's own maxlength silently refuses anything
+   further, which on its own just feels like the keyboard stopped working.
+   Flipping the editor's gold accent to the red used for errors elsewhere is
+   the signal that the name is being held back rather than dropped. */
+.world-name-input[data-at-limit] {
+  color: #fa7878;
+  border-color: #fa7878;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .world-name-input {
+    transition: none;
+  }
+}
+
+/* Pencil icon toggled on via Settings > Custom World Name. Mirrors
+   .setting-revert's colors (the settings modal's per-row "Reset to
+   default" icon button) so it reads as the same family of small,
+   golden-accented icon actions. A real <button> (valid here since it's
+   nested in .world-name-row, a <div>, not in #start-button), so the
+   generic `button` rule's chrome must be reset first. The selector is
+   descendant-qualified so `width` outranks `.controls-box button`'s
+   `width: 100%`, which would otherwise stretch the icon across the whole
+   row (the same clash .settings-button solves with !important). */
+.world-name-row .world-name-edit-button {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  padding: 0;
+  margin: 0;
+  box-shadow: none;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.world-name-edit-button:hover,
+.world-name-edit-button:focus-visible {
+  background: rgba(254, 204, 68, 0.3);
+  border-color: transparent;
+}
+
+.world-name-edit-button:focus-visible {
+  outline: 1px solid #fecc44;
+  outline-offset: 1px;
+}
+
+.world-name-edit-button svg {
+  width: 12px;
+  height: 12px;
+  fill: rgba(254, 204, 68, 0.75);
+  display: block;
+  transition: fill 0.15s ease;
+  pointer-events: none;
+}
+
+.world-name-edit-button:hover svg,
+.world-name-edit-button:focus-visible svg {
+  fill: #fecc44;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .world-name-edit-button {
+    transition: none;
+  }
+  .world-name-edit-button svg {
+    transition: none;
+  }
 }
 
 .map-container {
@@ -193,6 +365,7 @@ button:hover {
   background-color: #e0e0e0;
   border-radius: 10px;
   overflow: hidden;
+  position: relative;
 }
 
 #progress-detail {
@@ -207,12 +380,46 @@ button:hover {
   width: 0%;
   background-color: #4caf50;
   transition: width 0.4s;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Subtle modern sheen: evenly-spaced soft diagonal highlights drifting across.
+   Period is 16px along the 45deg axis; the keyframe shifts by 16/cos45 so the
+   loop is seamless. Animates background-position only (width stays JS-driven). */
+.progress-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent 0,
+    transparent 6px,
+    rgba(255, 255, 255, 0.12) 8px,
+    rgba(255, 255, 255, 0.12) 11px,
+    transparent 13px,
+    transparent 16px
+  );
+  will-change: background-position;
+  animation: progress-sheen 2s linear infinite;
+}
+
+@keyframes progress-sheen {
+  from { background-position: 0 0; }
+  to { background-position: 22.627px 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-bar::after { animation: none; will-change: auto; }
 }
 
 .footer {
-  margin-top: 20px;
+  margin-top: 8px;
+  padding-bottom: 6px;
   text-align: center;
   font-size: 0.9em;
+  flex-shrink: 0;
 }
 
 .footer-link {
@@ -245,70 +452,52 @@ button:hover {
   }
 }
 
-.tooltip {
-  position: relative;
-  display: block;
-  width: 100%;
-}
-
-.tooltip button {
-  width: 100%;
-}
-
 .controls-box button {
   width: 100%;
 }
 
-/* World Selection Container */
-.world-selection-container {
-  width: 100%;
-}
-
-.choose-world-btn {
-  padding: 10px;
-  line-height: 1.2;
-  width: 100%;
-  border-radius: 8px 8px 0 0 !important;
-  margin-bottom: 0 !important;
-  margin-top: 0 !important;
-  box-shadow: none !important;
-}
-
-/* World Format Toggle */
-.format-toggle-container {
+/* Connected Button Block */
+.button-block {
   display: flex;
+  flex-direction: column;
   width: 100%;
   gap: 0;
-  margin-top: 0;
+  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
 }
+
 
 .format-toggle-btn {
   flex: 1;
-  padding: 10px;
-  font-size: 1em;
+  padding: 12px 8px;
+  font-size: 0.9em;
   font-weight: 500;
-  border: 1px solid transparent;
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
   cursor: pointer;
   transition: all 0.25s ease;
   margin-top: 0;
   border-radius: 0;
+  box-shadow: none;
+  background-clip: padding-box;
 }
 
 .format-toggle-btn:first-child {
   border-radius: 0 0 0 8px;
 }
 
-.format-toggle-btn:last-child {
+.format-toggle-btn.format-toggle-btn--rightmost {
   border-radius: 0 0 8px 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.15);
 }
 
 .format-toggle-btn:not(.format-active) {
-  background-color: #3a3a3a;
-  color: #b0b0b0;
+  background-color: #3A3A3A;
+  color: #ffffff;
 }
 
 .format-toggle-btn:not(.format-active):hover {
-  background-color: #4a4a4a;
+  background-color: #4A4A4A;
   color: #ffffff;
 }
 
@@ -316,6 +505,7 @@ button:hover {
   background-color: var(--primary-accent);
   color: #0f0f0f;
   font-weight: 600;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
 }
 
 .format-toggle-btn.format-active:hover {
@@ -343,19 +533,103 @@ button:hover {
   border: 1px solid #797979;
   border-radius: 10px;
   width: 400px;
+  max-height: calc(90vh - 40px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.settings-scrollable {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 8px;
+  position: relative;
+}
+
+
+/* Custom scrollbar for settings */
+.settings-scrollable::-webkit-scrollbar {
+  width: 8px;
+}
+
+.settings-scrollable::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  margin-top: 8px;
+}
+
+.settings-scrollable::-webkit-scrollbar-thumb {
+  background-color: rgba(254, 204, 68, 0.5);
+  border-radius: 10px;
+}
+
+.settings-scrollable::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(254, 204, 68, 0.7);
+}
+
+/* License modal scrollable area */
+.license-scrollable {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 8px;
+  margin-top: 10px;
+}
+
+.license-scrollable::-webkit-scrollbar {
+  width: 10px;
+}
+
+.license-scrollable::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+}
+
+.license-scrollable::-webkit-scrollbar-thumb {
+  background-color: rgba(254, 204, 68, 0.5);
+  border-radius: 10px;
+}
+
+.license-scrollable::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(254, 204, 68, 0.7);
 }
 
 .close-button {
   color: #e9e9e9;
-  float: right;
   font-size: 28px;
   font-weight: bold;
   cursor: pointer;
+  line-height: 1;
 }
 
 .close-button:hover {
   color: #ffffff;
+}
+
+.settings-header {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.settings-header h2 {
+  margin: 0;
+}
+
+.settings-header .close-button {
+  position: absolute;
+  right: 0;
+  top: 0;
+}
+
+.settings-footer {
+  flex-shrink: 0;
 }
 
 /* Modal actions/buttons */
@@ -385,44 +659,146 @@ button:hover {
   }
 }
 
-#terrain-toggle {
+/* Update / release-notes modal */
+.update-modal-content {
+  width: 600px;
+  max-width: calc(100vw - 40px);
+}
+
+.update-modal-body {
+  font-size: 0.9em;
+  line-height: 1.45;
+  padding: 12px 14px;
+  border: 1px solid #5b5b5b;
+  border-radius: 6px;
+  background-color: #5f5f5f;
+  margin-top: 4px;
+  text-align: justify;
+  text-justify: inter-word;
+  hyphens: auto;
+}
+
+.update-modal-body img {
+  /* Release banner / inline screenshots: scale to container without distortion */
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  display: block;
+  margin: 8px auto;
+}
+
+.update-modal-body h1,
+.update-modal-body h2,
+.update-modal-body h3 {
+  margin: 14px 0 6px 0;
+  line-height: 1.25;
+}
+
+.update-modal-body h1 { font-size: 1.25em; }
+.update-modal-body h2 { font-size: 1.12em; }
+.update-modal-body h3 { font-size: 1.02em; }
+
+.update-modal-body p {
+  margin: 6px 0;
+}
+
+.update-modal-body ul,
+.update-modal-body ol {
+  margin: 6px 0;
+  padding-left: 22px;
+}
+
+.update-modal-body li {
+  margin: 2px 0;
+}
+
+.update-modal-body a {
+  color: #fecc44;
+  text-decoration: none;
+}
+
+.update-modal-body a:hover {
+  text-decoration: underline;
+}
+
+.update-modal-body code {
+  background-color: rgba(0, 0, 0, 0.25);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.update-modal-body pre {
+  background-color: rgba(0, 0, 0, 0.25);
+  padding: 8px 10px;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+
+.update-modal-body pre code {
+  background: none;
+  padding: 0;
+}
+
+.update-modal-body hr {
+  border: none;
+  border-top: 1px solid #797979;
+  margin: 12px 0;
+}
+
+.update-modal-body blockquote {
+  border-left: 3px solid #fecc44;
+  margin: 8px 0;
+  padding: 2px 10px;
+  color: #d8d8d8;
+}
+
+.update-modal-download-note {
+  flex-shrink: 0;
+  margin-top: 12px;
+  font-size: 0.8em;
+  line-height: 1.4;
+  opacity: 0.8;
+  text-align: center;
+}
+
+.update-modal-actions {
+  flex-shrink: 0;
+  margin-top: 12px;
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+
+.update-modal-actions button {
+  padding: 8px 16px;
+  font-weight: 600;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.update-modal-actions .btn-primary:hover {
+  filter: brightness(1.05);
+}
+
+#update-download-button[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Shared accent for all checkboxes and sliders so new toggles need no per-id CSS. */
+input[type="checkbox"],
+input[type="range"] {
   accent-color: #fecc44;
 }
 
-.terrain-toggle-container, .scale-slider-container {
+.terrain-toggle-container,
+.fillground-toggle-container,
+.interior-toggle-container,
+.scale-slider-container {
   margin: 15px 0;
-}
-
-#fillground-toggle {
-  accent-color: #fecc44;
-}
-
-.fillground-toggle-container, .scale-slider-container {
-  margin: 15px 0;
-}
-
-#interior-toggle {
-  accent-color: #fecc44;
-}
-
-.interior-toggle-container, .scale-slider-container {
-  margin: 15px 0;
-}
-
-#roof-toggle {
-  accent-color: #fecc44;
-}
-
-.roof-toggle-container, .scale-slider-container {
-  margin: 15px 0;
-}
-
-#city-boundaries-toggle {
-  accent-color: #fecc44;
-}
-
-#telemetry-toggle {
-  accent-color: #fecc44;
 }
 
 .scale-slider-container label {
@@ -477,11 +853,46 @@ button:hover {
 }
 
 /* Settings Modal Layout */
+.settings-section-header {
+  font-size: 0.7em;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: #c0c0c0;
+  margin-top: 10px;
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+  text-align: left;
+}
+
+.settings-section-header:first-of-type {
+  margin-top: 0;
+}
+
+.settings-notice {
+  border-left: 3px solid #fecc44;
+  margin-bottom: 12px;
+  padding: 6px 10px;
+  font-size: 0.8em;
+  color: #d8d8d8;
+  text-align: left;
+}
+
+/* A notice that reports an outcome rather than warning about one. Same green
+   and warm red the cache button flashes, so the panel speaks one language. */
+.settings-notice.is-success {
+  border-left-color: #4caf50;
+}
+
+.settings-notice.is-error {
+  border-left-color: #cf6679;
+}
+
 .settings-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
 }
 
 .settings-row label {
@@ -490,6 +901,8 @@ button:hover {
   display: flex;
   align-items: center;
   gap: 6px;
+  /* One line per setting name, the control beside it gives up the width. */
+  white-space: nowrap;
 }
 
 /* Tooltip icon (question mark in circle) */
@@ -513,49 +926,74 @@ button:hover {
   background-color: rgba(254, 204, 68, 0.5);
 }
 
-/* Arnis-styled tooltip box */
-.tooltip-icon::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  left: 50%;
-  bottom: calc(100% + 8px);
-  transform: translateX(-50%);
+/* Arnis-styled tooltip box.
+   The tooltip element is a single `<div class="global-tooltip">`
+   appended to `<body>` by `initTooltips()` in main.js, NOT a
+   `::after` on each icon. That lets it escape the
+   `.settings-scrollable` container's overflow clip, so tooltips on
+   icons near the panel's top or right edge extend past the panel
+   rather than being cut off. JS positions the box via
+   `getBoundingClientRect` on hover and flips it above/below the
+   icon based on available viewport space. */
+.global-tooltip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  max-width: 240px;
+  padding: 6px 14px;
   background-color: #2a2a2a;
   color: #fecc44;
-  padding: 6px 14px;
+  border: 1px solid #fecc44;
   border-radius: 6px;
   font-size: 12px;
   font-weight: normal;
-  white-space: nowrap;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  text-align: center;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-  border: 1px solid #fecc44;
   opacity: 0;
   visibility: hidden;
-  transition: opacity 0.2s ease, visibility 0.2s ease;
-  z-index: 1000;
+  transition: opacity 0.15s ease, visibility 0.15s ease;
+  /* Must exceed `.modal`'s z-index (20001). The tooltip element is a
+     body-level sibling of the settings modal, so without this the
+     modal overlay paints on top and the tooltip stays invisible even
+     though it's correctly positioned. */
+  z-index: 30000;
   pointer-events: none;
 }
 
-/* Tooltip arrow */
-.tooltip-icon::before {
-  content: '';
-  position: absolute;
-  left: 50%;
-  bottom: calc(100% + 2px);
-  transform: translateX(-50%);
-  border: 6px solid transparent;
-  border-top-color: #fecc44;
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.2s ease, visibility 0.2s ease;
-  z-index: 1001;
-  pointer-events: none;
-}
-
-.tooltip-icon:hover::after,
-.tooltip-icon:hover::before {
+.global-tooltip.is-visible {
   opacity: 1;
   visibility: visible;
+}
+
+/* Arrow. Positioned via JS (`left` per icon center), flipped to the
+   opposite edge when the tooltip opens below the icon. */
+.global-tooltip-arrow {
+  position: absolute;
+  width: 0;
+  height: 0;
+  border: 6px solid transparent;
+  /* Default: arrow on the bottom edge, pointing down toward an icon
+     that sits below the tooltip. */
+  bottom: -12px;
+  border-top-color: #fecc44;
+  transform: translateX(-50%);
+}
+
+.global-tooltip.flipped .global-tooltip-arrow {
+  /* When flipped below the icon, arrow points up at the icon from the
+     top edge of the tooltip. */
+  bottom: auto;
+  top: -12px;
+  border-top-color: transparent;
+  border-bottom-color: #fecc44;
+}
+
+.global-tooltip-body {
+  position: relative;
 }
 
 .settings-control {
@@ -570,6 +1008,7 @@ button:hover {
 }
 
 .settings-control input[type="text"],
+.settings-control input[type="password"],
 .settings-control input[type="number"] {
   width: 100%;
   max-width: 180px;
@@ -581,6 +1020,81 @@ button:hover {
 /* Save Path Setting */
 .save-path-control {
   gap: 0;
+}
+
+/* Rotation Angle Control */
+.rotation-control {
+  gap: 4px;
+}
+
+.rotation-control input[type="number"] {
+  width: 60px !important;
+  max-width: 60px !important;
+  text-align: center;
+  font-weight: bold;
+}
+
+/* Segmented control (game mode) */
+.segmented-control {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid #5a5a5a;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.segmented-control .segment {
+  all: unset;
+  box-sizing: border-box;
+  padding: 5px 10px;
+  color: #ececec;
+  font-size: 0.85em;
+  font-family: inherit;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.segmented-control .segment:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.segmented-control .segment + .segment {
+  border-left: 1px solid #5a5a5a;
+}
+
+.segmented-control .segment.active {
+  background: #fecc44;
+  color: #1e1e1e;
+  font-weight: 600;
+}
+
+/* One segment the selected world format cannot show, next to ones it can. */
+.segmented-control .segment:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.segmented-control .segment:disabled:hover {
+  background: none;
+}
+
+/* Five segments do not fit beside a label at the normal size. */
+.segmented-control.is-compact .segment {
+  padding: 5px 7px;
+  font-size: 0.78em;
+}
+
+#world-time-value {
+  min-width: 42px;
+  text-align: right;
+  font-weight: bold;
+}
+
+.rotation-unit {
+  font-weight: bold;
+  color: #ececec;
+  font-size: 0.95em;
 }
 
 .save-path-input {
@@ -616,13 +1130,146 @@ button:hover {
   fill: #fecc44;
 }
 
+/* How much disk the caches hold, sitting just left of the Clear button. Muted
+   so it reads as information about the button rather than a second control. */
+.cache-size {
+  /* the panel's secondary text colour; #9aa4b2 was too dim to read here */
+  color: #d6d6d6;
+  font-size: 0.8em;
+  margin-right: 8px;
+  white-space: nowrap;
+}
+
+/* Clear-cache button: compact golden-outline button that sits in the
+   settings row's standard right-aligned `.settings-control` slot, no
+   extra wrapper element. Success/error feedback is expressed by a
+   brief class-driven background flash rather than a separate status
+   label; keeps the row visually consistent with the checkbox and
+   slider rows next to it. */
+.clear-cache-button,
+.settings-reset-button {
+  background: none;
+  border: 1px solid #fecc44;
+  border-radius: 4px;
+  color: #fecc44;
+  padding: 2px 14px;
+  margin: 0;
+  box-shadow: none;
+  cursor: pointer;
+  font-size: 0.85em;
+  /* Include `color` in the transition so the success flash fades both
+     the background and foreground back to default together, instead of
+     one property snapping. */
+  transition: background 0.4s ease, color 0.4s ease,
+              border-color 0.4s ease, opacity 0.2s ease;
+}
+
+.clear-cache-button:hover:not(:disabled):not(.is-success):not(.is-error),
+.settings-reset-button:hover:not(:disabled):not(.is-confirming) {
+  background: rgba(254, 204, 68, 0.15);
+}
+
+.clear-cache-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* Green flash on success — background + text reinforce the confirmation
+   without touching layout. The button stays the same size so the row
+   doesn't reflow between idle / confirming states. */
+.clear-cache-button.is-success {
+  background: rgba(76, 175, 80, 0.85);
+  color: #ffffff;
+  border-color: #4caf50;
+}
+
+.clear-cache-button.is-error {
+  background: rgba(207, 102, 121, 0.85);
+  color: #ffffff;
+  border-color: #cf6679;
+}
+
+/* Per-setting revert button, inside the row label after the tooltip icon. */
+/* Same 16px box and round hover target as .tooltip-icon so they read as a pair. */
+/* The resets undo the global button rule, like .save-path-browse does. */
+/* No border: this is content-box in some engines and it would shrink the glyph. */
+/* Hidden with visibility, not display, so the label cannot shift mid-drag. */
+.setting-revert {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  border-radius: 50%;
+  box-shadow: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.settings-row.is-modified .setting-revert {
+  visibility: visible;
+  opacity: 1;
+}
+
+.setting-revert:hover {
+  background: rgba(254, 204, 68, 0.3);
+}
+
+.setting-revert:focus-visible {
+  outline: 1px solid #fecc44;
+  outline-offset: 1px;
+}
+
+/* Slightly inset in the 16px box and softened, to sit at the same visual
+   weight as the tooltip icon's translucent disc rather than outshine it. */
+.setting-revert svg {
+  width: 13px;
+  height: 13px;
+  fill: rgba(254, 204, 68, 0.75);
+  display: block;
+  transition: fill 0.15s ease;
+}
+
+.setting-revert:hover svg {
+  fill: #fecc44;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .setting-revert {
+    transition: none;
+  }
+}
+
+/* Disabled while nothing differs from the defaults. */
+.settings-reset-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+  border-color: rgba(254, 204, 68, 0.35);
+}
+
+/* Awaiting the second click. Same warm red as .clear-cache-button.is-error. */
+.settings-reset-button.is-confirming {
+  background: rgba(207, 102, 121, 0.85);
+  border-color: #cf6679;
+  color: #ffffff;
+}
+
 .license-button-row {
   justify-content: center;
+  gap: 8px;
   margin-top: 5px;
 }
 
 .license-button {
-  width: 80% !important;
+  flex: 1;
+  max-width: 50%;
 }
 
 /* Buy Me a Coffee and Discord styling */
@@ -634,18 +1281,21 @@ button:hover {
   margin-bottom: -10px;
 }
 
+.github-link,
 .buymeacoffee-link,
 .discord-link {
   display: inline-block;
   transition: transform 0.3s ease, opacity 0.3s ease;
 }
 
+.github-link:hover,
 .buymeacoffee-link:hover,
 .discord-link:hover {
   transform: scale(1.05);
   opacity: 0.8;
 }
 
+.github-logo,
 .buymeacoffee-logo,
 .discord-logo {
   height: 35px;
@@ -738,35 +1388,74 @@ button:hover {
   }
 }
 
-.button-container {
+.button-block-row {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: flex-start;
-  gap: 5px;
+  gap: 0;
+  width: 100%;
 }
 
-.start-button {
-  padding: 10px 20px;
-  border: none;
-  border-radius: 5px;
-  font-size: 16px;
+/* #start-button and .world-name-row are two elements (the world-name editor
+   can't be nested inside a <button>) that have to look like one. The wrapper
+   paints the fill, corner and hover for both of them; giving each its own
+   background instead would mean re-deriving the generic `button` colours per
+   colour scheme in two places and risking a visible seam between them. */
+.start-button-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  flex: 1;
+  background-color: #ffffff;
+  border-radius: 8px 0 0 0;
   cursor: pointer;
   transition: background-color 0.3s;
 }
 
-.start-button:hover {
+@media (prefers-color-scheme: dark) {
+  .start-button-wrap {
+    background-color: #0f0f0f98;
+  }
+}
+
+.start-button-wrap:hover {
   background-color: #4caf50;
 }
 
+/* The :active variant is not cosmetic: dark mode's `button:active` rule is
+   more specific than a bare `.start-button`, so without it the button would
+   flash its own fill over the wrapper's while held down. */
+.start-button,
+.start-button:active {
+  background-color: transparent;
+}
+
+.start-button {
+  padding: 14px 20px 0;
+  border: none;
+  border-radius: 0;
+  font-size: 16px;
+  font-weight: 500;
+  cursor: pointer;
+  margin-top: 0;
+  box-shadow: none;
+}
+
 .settings-button {
-  width: 40px !important;
-  height: 38px;
-  border-radius: 5px;
+  width: 44px !important;
+  min-width: 44px;
+  height: auto;
+  align-self: stretch;
+  border-radius: 0 8px 0 0;
   display: flex;
   justify-content: center;
   align-items: center;
   cursor: pointer;
   transition: background-color 0.3s, border-color 0.3s;
+  margin-top: 0;
+  box-shadow: none;
+  flex-shrink: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.15);
 }
 
 .settings-button svg {
@@ -779,7 +1468,7 @@ button:hover {
 
 /* Logo Animation */
 #arnis-logo {
-  width: 35%;
+  width: 30%;
   height: auto;
   opacity: 0;
   transform: scale(0) rotate(-10deg);
@@ -800,4 +1489,14 @@ button:hover {
     transform: scale(1) rotate(0deg);
     opacity: 1;
   }
+}
+
+/* Options that do not apply to the selected celestial body or world format */
+.settings-row-unavailable {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.segmented-disabled {
+  pointer-events: none;
 }
