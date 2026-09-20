@@ -378,29 +378,20 @@ pub fn generate_world_with_options(
     // generic natural polygons, while still preserving deliberately placed
     // structures that already occupy the same surface blocks.
     let used_external_land_polygons = if let Some(path) = args.land_polygons.as_deref() {
-        if coastline_ways.is_empty() {
-            if args.debug {
-                println!(
-                    "Skipping external coastline dataset because no coastline ways were found in this bbox."
+        match crate::land_polygons::generate_oceans_from_land_polygons(
+            &mut editor,
+            path,
+            &llbbox,
+            &xzbbox,
+            args.scale,
+        ) {
+            Ok(generated) => generated,
+            Err(err) => {
+                eprintln!(
+                    "Warning: failed to use external land polygons ({}). Falling back to coastline inference.",
+                    err
                 );
-            }
-            false
-        } else {
-            match crate::land_polygons::generate_oceans_from_land_polygons(
-                &mut editor,
-                path,
-                &llbbox,
-                &xzbbox,
-                args.scale,
-            ) {
-                Ok(generated) => generated,
-                Err(err) => {
-                    eprintln!(
-                        "Warning: failed to use external land polygons ({}). Falling back to coastline inference.",
-                        err
-                    );
-                    false
-                }
+                false
             }
         }
     } else {
