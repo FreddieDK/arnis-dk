@@ -1,4 +1,7 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(not(debug_assertions), feature = "gui"),
+    windows_subsystem = "windows"
+)]
 
 mod args;
 mod bedrock_block_map;
@@ -671,14 +674,6 @@ fn run_cli() {
         part_groups,
     ) {
         Ok(_) => {
-            if args.bedrock {
-                println!(
-                    "{} Bedrock world saved to: {}",
-                    "Done!".green().bold(),
-                    generation_path.display()
-                );
-            }
-
             // For Java Edition, update spawn point in level.dat if provided
             if !args.bedrock {
                 if let (Some((spawn_x, spawn_z)), Some(spawn_y)) = (spawn_point, spawn_y_for_java) {
@@ -696,6 +691,11 @@ fn run_cli() {
                     }
                 }
             }
+            println!(
+                "{} World saved to: {}",
+                "Done!".green().bold(),
+                generation_path.display()
+            );
         }
         Err(e) => {
             eprintln!("{} {}", "Error:".red().bold(), e);
