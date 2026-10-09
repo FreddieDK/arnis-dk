@@ -521,21 +521,23 @@ impl<'a> WorldEditor<'a> {
         {
             return true;
         }
-        let radius = (24.0 * self.scale()).round().max(1.0) as i32;
         let urban = self.tree_density.as_ref().is_some_and(|a| a.is_urban(x, z))
-            || [
-                (0, 0),
-                (radius, 0),
-                (-radius, 0),
-                (0, radius),
-                (0, -radius),
-                (radius, radius),
-                (radius, -radius),
-                (-radius, radius),
-                (-radius, -radius),
-            ]
-            .iter()
-            .any(|&(dx, dz)| self.cover_class(x + dx, z + dz) == crate::land_cover::LC_BUILT_UP);
+            || [24.0, 64.0].iter().any(|metres| {
+                let radius = (metres * self.scale()).round().max(1.0) as i32;
+                [
+                    (0, 0),
+                    (radius, 0),
+                    (-radius, 0),
+                    (0, radius),
+                    (0, -radius),
+                    (radius, radius),
+                    (radius, -radius),
+                    (-radius, radius),
+                    (-radius, -radius),
+                ]
+                .iter()
+                .any(|&(dx, dz)| self.cover_class(x + dx, z + dz) == crate::land_cover::LC_BUILT_UP)
+            });
         !urban || crate::trees::density::keep_urban_tree(x, z)
     }
 

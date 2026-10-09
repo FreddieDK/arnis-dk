@@ -392,16 +392,16 @@ udtyndingen, også når de ligger inde i et byområde. Multipolygonernes
 delstykker samles, og indre huller regnes ikke som skov.
 
 `WorldEditor::urban_tree_density_allows` bruger desuden land-cover-klassen
-for bebyggelse på stedet eller ved otte prøver omkring stedet, 24 meter væk
-langs akserne (diagonalerne ligger længere væk). Det gør reglen anvendelig
+for bebyggelse på stedet eller ved otte prøver i hver af afstandene 24 og
+64 meter langs akserne (diagonalerne ligger længere væk). Det gør reglen anvendelig
 på plæner ved byen, selv når OSM mangler et byområde. Uden disse tegn på by
 ændres tæthedsvalget ikke; land-cover-trædække alene udløser ingen udtynding.
 Manglende skovkortlægning kan derfor stadig give udtynding langs bebyggelse.
 
-I byområdet beholdes 70 procent af de mulige stammepositioner med en fast,
-koordinatbaseret hash. Det er en ekstra moderat udtynding af både spredte,
+I byområdet beholdes 20 procent af de mulige stammepositioner med en fast,
+koordinatbaseret hash. Det er en ekstra kraftig udtynding af både spredte,
 satellitbaserede og kortlagte træer. Det betyder ikke nødvendigvis præcis
-30 procent færre træer eller løvblokke i et bestemt kort. Skovens eksisterende
+80 procent færre træer eller løvblokke i et bestemt kort. Skovens eksisterende
 arts-, størrelses- og tæthedsvalg ændres ikke. Kravet om naturligt rodsted og
 forbuddet mod træer på belægning gælder fortsat alle træer.
 
@@ -413,7 +413,8 @@ og ændrer ikke andre tilfældighedsvalg. Tests dækker by/skov-overlap,
 skovhuller, bebyggelsesdata, ens resultater på tværs af fliser og uændret
 accept af træpositioner i skov.
 
-Slagelse-testen med identisk område og input gav 133.322 løvblokke mod
+Den første indstilling (70 procent bevaret, kun 24 meters naboprøver)
+gav med identisk Slagelse-område og input 133.322 løvblokke mod
 175.013 før (ca. 24 procent færre i hele kortet). Fjernede stammer på græs
 er kontrolleret, bl.a. ved X=638, Y=-47, Z=827. De 1.302 tidligere
 adresseskilte er identiske, og to ekstra har fået plads. Byudtrækket har
@@ -421,3 +422,20 @@ ingen eksplicitte OSM-skovområder; skovbevarelsen er derfor verificeret med
 kontrollerede testområder, ikke med en stor skov i denne Slagelse-verden.
 56 trætests og derefter alle fire målrettede tæthedstests bestod, samt
 release-build og GUI-check. Kontrollen af verdenen er automatisk, ikke visuel.
+
+
+Efter brugerens visuelle vurdering er indstillingen skærpet til 20 procent
+bevarede kandidatpositioner og supplerende naboprøver ved 64 meter. Større
+græsarealer mellem huse bliver dermed også genkendt som by, selv hvis de
+ikke er kortlagt som residential. De oprindelige 24 meters prøver beholdes.
+Kortlagte skove fritages stadig før kontrollen af bebyggelse.
+
+Ny Slagelse-kontrol med samme input: 133.322 → 47.858 løvblokke (64 procent
+færre end forrige version). I kontrolområdet X=560–740, Z=720–860 ved
+brugerens teleportpunkt faldt løv fra 8.036 til 851 (89 procent færre).
+Disse tal måler løvblokke, ikke antal træer. Alle 1.304 tidligere
+adresseskilte er bevaret, og ét ekstra skilt har fået plads. Alle 1.617
+intakte dørpar er bevaret uden sidehuller. Fire målrettede tæthedstests,
+release-build og GUI-check bestod. Verdensfilerne er kontrolleret automatisk;
+der er ikke udført visuel kontrol i Minecraft. Eksisterende verdener ændres
+ikke: testen ligger i en ny `slagelse-sparse-city-3.3-dk`-verden.

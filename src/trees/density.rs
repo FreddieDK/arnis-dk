@@ -1,4 +1,4 @@
-//! Moderate thinning in urban green spaces; explicit woods always keep their density.
+//! Sparse trees in urban green spaces; explicit woods always keep their density.
 use crate::osm_parser::{ProcessedElement, ProcessedMemberRole, ProcessedWay};
 use geo::{BoundingRect, Intersects, LineString, Point, Polygon, Rect};
 
@@ -117,7 +117,7 @@ impl TreeDensityAreas {
 
 /// Independent of shape/species RNG, identical across passes and tile boundaries.
 pub fn keep_urban_tree(x: i32, z: i32) -> bool {
-    crate::land_cover::coord_hash(x ^ 0x5542, z ^ 0x5452) % 100 < 70
+    crate::land_cover::coord_hash(x ^ 0x5542, z ^ 0x5452) % 100 < 20
 }
 
 #[cfg(test)]
@@ -171,7 +171,7 @@ mod tests {
     }
 
     #[test]
-    fn urban_keep_rate_is_moderate_and_repeatable() {
+    fn urban_keep_rate_is_sparse_and_repeatable() {
         let count = (-100..100)
             .flat_map(|x| (-100..100).map(move |z| (x, z)))
             .filter(|&(x, z)| {
@@ -180,7 +180,7 @@ mod tests {
                 a
             })
             .count();
-        assert!((27000..29000).contains(&count), "{count}");
+        assert!((7000..9000).contains(&count), "{count}");
     }
 
     #[test]
