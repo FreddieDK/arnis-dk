@@ -136,3 +136,14 @@ cargo test --locked --no-default-features
 - [Datafordelerens grunddatamodel](https://grunddatamodel.datafordeler.dk/)
 
 Arnis-koden er Apache-2.0. Upstreams [LICENSE](LICENSE) og [NOTICE](NOTICE) bevares.
+
+
+## Store områder med Meld (eksperimentelt)
+
+Der findes nu en kommandolinjebro, der bruger en ekstern Meld-checkout til
+områdeplanlægning og Arnis-DK One World til en fælles verden med danske
+bygninger og fungerende billedskilte. Den genererer delområder sekventielt
+og kan genoptage afbrudte job. Ni dele på cirka 6,5 km² er afprøvet.
+Det er endnu ikke Melds parallelle GUI-workflow.
+
+Se [opsætning, testresultater og begrænsninger](danish_data/MELD.md).
