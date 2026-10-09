@@ -1,0 +1,47 @@
+name: Linux CLI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-cli
+      - name: Build CLI without desktop dependencies
+        run: cargo build --release --locked --no-default-features
+      - name: Package binary and Danish data tools
+        run: python3 .github/scripts/package_linux.py
+      - name: Check the extracted package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -c arnis-dk-linux-x86_64.tar.gz.sha256
+          mkdir extracted
+          tar -xzf arnis-dk-linux-x86_64.tar.gz -C extracted
+          cd extracted/arnis-dk-linux-x86_64
+          ./arnis --version
+          ./arnis --help > cli-help.txt
+          grep -q -- '--danish-buildings' cli-help.txt
+          grep -q -- '--one-world' cli-help.txt
+          ldd ./arnis | tee dependencies.txt
+          ! grep -q 'not found' dependencies.txt
+          printf '{"elements":[]}' > empty-osm.json
+          timeout 300 ./arnis --bbox '55.6700,12.5600,55.6702,12.5603' --file empty-osm.json --output-dir smoke-world --mode geo-only --overture=false --canopy-height=false --no-3d --signage full --map-item=false
+          test -s smoke-world/level.dat
+          find smoke-world/region -name '*.mca' | grep -q .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: arnis-dk-linux-x86_64
+          path: dist/arnis-dk-linux-x86_64.tar.gz*
+          if-no-files-found: error
+          retention-days: 30
