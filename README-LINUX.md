@@ -33,12 +33,12 @@ den til Minecraft. Generér ikke ind i en verden, som en server har åben.
 ## GeoDanmark, BBR og DAR
 
 Arnis-DK læser et forberedt supplement. Det henter ikke de danske registre
-automatisk ved almindelig kørsel. Python **3.11 eller nyere** kræves kun til
-dataværktøjerne og Meld-integrationen. Installer Python og venv via din
+automatisk ved almindelig kørsel. Python **3.12 eller nyere** kræves kun til
+dataværktøjerne og Meld-integrationen. Installer Python 3.12 og venv via din
 distributions pakkehåndtering, og opret derefter et miljø:
 
 ```bash
-python3 -m venv .venv
+python3.12 -m venv .venv
 .venv/bin/pip install -r danish_data/requirements.txt
 ```
 

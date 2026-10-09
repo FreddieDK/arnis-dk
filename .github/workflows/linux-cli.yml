@@ -16,6 +16,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: linux-cli
+          cache-on-failure: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Check Danish data tools on Linux
+        run: |
+          python -m pip install -r danish_data/requirements.txt
+          python -m unittest discover -s danish_data -p 'test_*.py'
       - name: Build CLI without desktop dependencies
         run: cargo build --release --locked --no-default-features
       - name: Package binary and Danish data tools
@@ -37,8 +45,8 @@ jobs:
           ! grep -q 'not found' dependencies.txt
           printf '{"elements":[]}' > empty-osm.json
           timeout 300 ./arnis --bbox '55.6700,12.5600,55.6702,12.5603' --file empty-osm.json --output-dir smoke-world --mode geo-only --overture=false --canopy-height=false --no-3d --signage full --map-item=false
-          test -s smoke-world/level.dat
-          find smoke-world/region -name '*.mca' | grep -q .
+          test -s 'smoke-world/Arnis World 1/level.dat'
+          find 'smoke-world/Arnis World 1/region' -name '*.mca' | grep -q .
       - uses: actions/upload-artifact@v7
         with:
           name: arnis-dk-linux-x86_64
