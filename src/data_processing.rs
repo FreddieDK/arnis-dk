@@ -957,6 +957,8 @@ pub fn generate_world_with_options(
         None => Arc::clone(&road_mask),
     };
     editor.set_sealed_surface(Arc::clone(&sealed_surface));
+    let tree_density = Arc::new(crate::trees::density::TreeDensityAreas::collect(&elements));
+    editor.set_tree_density(Arc::clone(&tree_density));
 
     let mapped_trunks = Arc::new(crate::trees::mapped::MappedTrunks::collect(
         &elements, args.scale,
@@ -1208,6 +1210,7 @@ pub fn generate_world_with_options(
                 tile_editor.set_tree_pack(Arc::clone(tp));
             }
             tile_editor.set_sealed_surface(Arc::clone(&sealed_surface));
+            tile_editor.set_tree_density(Arc::clone(&tree_density));
             tile_editor.set_mapped_trunks(Arc::clone(&mapped_trunks));
             if let Some(ctx) = &signage_ctx {
                 tile_editor.set_signage(Arc::clone(ctx));
@@ -1697,6 +1700,7 @@ pub fn generate_world_with_options(
     // actually frees the bitmap.
     editor.release_sealed_surface();
     drop(sealed_surface);
+    drop(tree_density);
     drop(road_mask);
     drop(tunnel_footprint);
     drop(rail_mask);

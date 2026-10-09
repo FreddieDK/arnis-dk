@@ -197,6 +197,7 @@ pub struct WorldEditor<'a> {
     ground: Option<Arc<Ground>>,
     /// Loaded region tree pack (None = procedural); shared via Arc across main + tile editors.
     tree_pack: Option<Arc<crate::trees::region::RegionLibrary>>,
+    tree_density: Option<Arc<crate::trees::density::TreeDensityAreas>>,
     /// Columns owned by a man-made ground cover (roads, paths, pitches, courts,
     /// parking); vegetation stays off them. Shared via Arc with the tile editors.
     sealed_surface: Option<Arc<crate::floodfill_cache::SealedSurfaceBitmap>>,
@@ -284,6 +285,7 @@ impl<'a> WorldEditor<'a> {
             llbbox,
             ground: None,
             tree_pack: None,
+            tree_density: None,
             sealed_surface: None,
             mapped_trunks: None,
             format: WorldFormat::JavaAnvil,
@@ -337,6 +339,7 @@ impl<'a> WorldEditor<'a> {
             llbbox,
             ground: None,
             tree_pack: None,
+            tree_density: None,
             sealed_surface: None,
             mapped_trunks: None,
             format,
@@ -390,6 +393,7 @@ impl<'a> WorldEditor<'a> {
             llbbox,
             ground: None,
             tree_pack: None,
+            tree_density: None,
             sealed_surface: None,
             mapped_trunks: None,
             format: WorldFormat::LuantiWorld,
@@ -500,6 +504,39 @@ impl<'a> WorldEditor<'a> {
     pub fn release_sealed_surface(&mut self) {
         self.sealed_surface = None;
         self.mapped_trunks = None;
+        self.tree_density = None;
+    }
+
+    pub fn set_tree_density(&mut self, areas: Arc<crate::trees::density::TreeDensityAreas>) {
+        self.tree_density = Some(areas);
+    }
+
+    /// Woods take priority over urban landuse, including woods inside towns.
+    /// Nearby built-up land cover also identifies lawns beside development.
+    pub fn urban_tree_density_allows(&self, x: i32, z: i32) -> bool {
+        if self
+            .tree_density
+            .as_ref()
+            .is_some_and(|a| a.is_forest(x, z))
+        {
+            return true;
+        }
+        let radius = (24.0 * self.scale()).round().max(1.0) as i32;
+        let urban = self.tree_density.as_ref().is_some_and(|a| a.is_urban(x, z))
+            || [
+                (0, 0),
+                (radius, 0),
+                (-radius, 0),
+                (0, radius),
+                (0, -radius),
+                (radius, radius),
+                (radius, -radius),
+                (-radius, radius),
+                (-radius, -radius),
+            ]
+            .iter()
+            .any(|&(dx, dz)| self.cover_class(x + dx, z + dz) == crate::land_cover::LC_BUILT_UP);
+        !urban || crate::trees::density::keep_urban_tree(x, z)
     }
 
     /// Sets the mapped tree trunks (shared across the main and tile editors).

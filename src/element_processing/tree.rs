@@ -683,6 +683,11 @@ impl Tree {
 
         // Both tree models are fixed block sizes, so at low scale they tower over the world.
         let scale = editor.scale();
+        if (scale < MICRO_TREE_MAX_SCALE || editor.tree_pack().is_none())
+            && !editor.urban_tree_density_allows(x, z)
+        {
+            return;
+        }
         if scale < MICRO_TREE_MAX_SCALE {
             let height_m = mapped
                 .and_then(|m| m.height_m)
@@ -766,6 +771,7 @@ impl Tree {
                     || editor.check_for_block(sx, 0, sz, Some(road_water))
                     || bridge_surface.is_some_and(|b| b.contains(sx, sz))
                     || !scattered_tree_ground(editor, sx, sz)
+                    || !editor.urban_tree_density_allows(sx, sz)
                 {
                     return;
                 }
