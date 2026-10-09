@@ -561,7 +561,7 @@ impl Tree {
         );
     }
 
-    /// Creates a tree of a specific type. allow_on_paved is true only for natural=tree nodes.
+    /// Creates a tree of a specific type. The legacy paving flag cannot bypass soil checks.
     /// `from_tags`: a leaf type or wetland tag chose the type, so it beats the ecoregion mix.
     pub fn create_of_type(
         editor: &mut WorldEditor,
@@ -585,7 +585,7 @@ impl Tree {
         );
     }
 
-    /// A tree OSM maps. It may stand on paving and keeps its mapped position.
+    /// A tree OSM maps. It keeps its position only where the ground permits a tree.
     pub fn create_mapped(
         editor: &mut WorldEditor,
         (x, y, z): Coord,
@@ -640,7 +640,7 @@ impl Tree {
         // Roads, pitches and other paved areas own their columns. The block check
         // below cannot see this: a surface=dirt track is dirt like any field, and a
         // pitch drawn after the park around it has not been painted yet.
-        if !allow_on_paved && !scattered_tree_ground(editor, x, z) {
+        if !scattered_tree_ground(editor, x, z) {
             return;
         }
 
@@ -765,7 +765,7 @@ impl Tree {
                     || building_footprints.is_some_and(|f| f.contains(sx, sz))
                     || editor.check_for_block(sx, 0, sz, Some(road_water))
                     || bridge_surface.is_some_and(|b| b.contains(sx, sz))
-                    || (!allow_on_paved && !scattered_tree_ground(editor, sx, sz))
+                    || !scattered_tree_ground(editor, sx, sz)
                 {
                     return;
                 }
@@ -1704,9 +1704,9 @@ mod tests {
         assert!(has_trunk(&owner));
     }
 
-    // allow_on_paved lets a mapped tree stand on paving, water always rejected
+    // The legacy paving flag cannot bypass the same soil rule as mapped trees.
     #[test]
-    fn allow_on_paved_lets_dedicated_trees_stand_on_paving_but_never_on_water() {
+    fn legacy_paving_flag_cannot_place_trees_on_paving_or_water() {
         let xzbbox = XZBBox::rect_from_min_max(0, 0, 63, 63).unwrap();
         let llbbox = LLBBox::new(54.6, 9.9, 54.61, 9.91).unwrap();
         let has_trunk = |editor: &WorldEditor| editor.check_for_block(30, 2, 30, Some(&[OAK_LOG]));
@@ -1728,7 +1728,7 @@ mod tests {
             "a scattered tree must not grow on a paved surface"
         );
 
-        // Deliberately-mapped tree (allow_on_paved = true) on the same paved block: allowed.
+        // The old allow_on_paved argument no longer bypasses the ground check.
         let mut editor = WorldEditor::new(std::env::temp_dir(), &xzbbox, llbbox);
         editor.set_block(SMOOTH_STONE, 30, 0, 30, None, None);
         Tree::create_of_type(
@@ -1741,8 +1741,8 @@ mod tests {
             false,
         );
         assert!(
-            has_trunk(&editor),
-            "a dedicated natural=tree node must stand on paving"
+            !has_trunk(&editor),
+            "a mapped tree must not stand on paving"
         );
 
         // Water is off-limits even with allow_on_paved = true.
@@ -1804,7 +1804,7 @@ mod sealed_surface_tests {
     }
 
     #[test]
-    fn a_mapped_tree_node_still_stands_on_a_sealed_column() {
+    fn a_mapped_tree_node_is_rejected_on_a_sealed_column() {
         let xzbbox = XZBBox::rect_from_min_max(0, 0, 31, 31).unwrap();
         let mut editor = editor_with_sealed_column(&xzbbox);
 
@@ -1818,13 +1818,13 @@ mod sealed_surface_tests {
             false,
         );
         assert!(
-            !column_is_empty(&editor, 16, 16),
-            "natural=tree is mapped on purpose and keeps its paving exception"
+            column_is_empty(&editor, 16, 16),
+            "mapped trees must also respect sealed surfaces"
         );
     }
 
     #[test]
-    fn speculative_trees_require_soil_but_mapped_street_trees_keep_their_position() {
+    fn all_tree_sources_require_natural_soil() {
         let bounds = XZBBox::rect_from_min_max(0, 0, 31, 31).unwrap();
         let ll = LLBBox::new(46.0, 7.7, 46.01, 7.71).unwrap();
         for surface in [
@@ -1869,7 +1869,11 @@ mod sealed_surface_tests {
         editor.set_block_absolute(STONE_BRICKS, 16, 0, 16, None, None);
         let mapped = crate::trees::mapped::MappedTree::from_tags(&Default::default(), 1);
         Tree::create_mapped(&mut editor, (16, 1, 16), &mapped, None, None);
-        assert!(editor.block_exists_absolute(16, 1, 16));
+        assert!(!editor.block_exists_absolute(16, 1, 16));
+        let mut planted = WorldEditor::new(std::env::temp_dir(), &bounds, ll);
+        planted.set_block_absolute(GRASS_BLOCK, 16, 0, 16, None, None);
+        Tree::create_mapped(&mut planted, (16, 1, 16), &mapped, None, None);
+        assert!(planted.block_exists_absolute(16, 1, 16));
     }
 }
 

@@ -1030,8 +1030,8 @@ pub fn generate_ground_region(
                                     None,
                                 );
                             // Satellite crowns can overhang pavement. Speculative trunks
-                            // need natural soil; only explicitly mapped trees may stand
-                            // on paving (handled during OSM processing).
+                            // need natural soil, as do mapped trees handled during
+                            // OSM processing.
                             let ground_allows_trees = ground_is_natural;
                             // Where the canopy map reaches, it decides which columns get
                             // trees on any class, and land cover keeps the surface and the

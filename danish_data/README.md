@@ -340,7 +340,7 @@ facader og garanterer ikke den præcise placering af en virkelig dør.
 
 ### Træer på byens belægninger
 
-Automatisk placerede træer må ikke bruge belægning som rodsted, blot fordi
+Træer må ikke bruge belægning som rodsted, blot fordi
 satellitdata viser en trækrone over stedet. `ground_generation.rs` bruger nu
 kun den eksisterende kontrol for naturligt underlag til de ekstra træer;
 undtagelsen for glat sten, stenmursten og revnede stenmursten er fjernet.
@@ -354,9 +354,13 @@ Sand og øvrige naturlige underlag bevares af hensyn til strand- og skovhabitate
 Før terrænet er udfyldt tillades en tom kolonne, undtagen når land cover angiver
 bebyggelse; et allerede tegnet græsbed kan stadig bruges i et bebygget område.
 
-OSM's eksplicitte `natural=tree` og `natural=tree_row` bevares, også på
-belægning, da disse kan være reelle gadetræer i plantehuller. Træer inde i
-bygninger, under broer og på vand afvises som hidtil. Skov-/parkernes
+OSM's eksplicitte `natural=tree` og `natural=tree_row` skal nu også overholde
+samme krav til naturligt underlag. Undtagelsen for registrerede gadetræer på
+belægning er fjernet efter brugerens ønske: ved La Viva stod tæt registrerede
+træer ellers tilbage efter den første rettelse. Disse registreringer alene
+giver ikke længere adgang til en vej-, fortovs- eller pladskolonne. Et separat
+kortlagt græsbed/jordareal kan stadig have træer. Træer inde i bygninger,
+under broer og på vand afvises som hidtil. Skov-/parkernes
 tæthedsindstillinger, terrænhøjder og Mapterhorn-data er uændrede. Ændringen
 gælder nygenererede kort og kræver ingen ny API-nøgle eller serverplugin.
 
@@ -367,5 +371,14 @@ stammer på stenmursten ved bl.a. X=501, Y=-50, Z=195 er fjernet i den nye
 verdensfil. Alle 1.298 adresseskilte er identiske, og antal dørblokke er uændret.
 53 trætests bestod (1 ignoreret), samt release-build og GUI-check. Testene
 omfatter spredte/canopy-træer på forskellige belægninger, naturlige underlag
-og bevarelse af et eksplicit kortlagt gadetræ. Ingen visuel Minecraft-kontrol
+og (i denne første test) bevarelse af et eksplicit kortlagt gadetræ. Ingen visuel Minecraft-kontrol
 er udført af hele området.
+
+Efter fjernelse af gadetræernes belægningsundtagelse er rækken ved La Viva
+kontrolleret i den nye verdensfil: 17 tidligere stammekolonner på stenmursten
+er nu luft over uændret belægning. Løvblokke i hele området faldt yderligere
+fra 445.348 til 175.013; det er ikke et antal træer. Alle 1.298 tidligere
+adresseskilte er identiske, og fire ekstra skilte er kommet til, hvor der nu
+er plads. De opdaterede tests afviser også kortlagte træer på belægning og
+bekræfter, at kortlagte træer stadig kan stå på græs. 53 trætests bestod
+(1 ignoreret), samt release-build og GUI-check.
