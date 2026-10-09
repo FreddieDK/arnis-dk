@@ -1110,6 +1110,21 @@ fn place_address_sign(
 }
 
 /// Facade signs and house number for a building way. Runs after the walls are built.
+pub(super) fn generate_entrance_address_sign(
+    editor: &mut WorldEditor,
+    way: &ProcessedWay,
+    anchor: FacadeAnchor,
+    text: &str,
+) {
+    let Some(ctx) = editor.signage().filter(|s| s.level == SignageLevel::Full) else {
+        return;
+    };
+    if editor.owns(anchor.x, anchor.z) && place_address_sign(editor, &anchor, text, &way.nodes) {
+        ctx.note("address signs", anchor.x, anchor.number_y, anchor.z);
+    }
+}
+
+/// Facade signs and the fallback building-wide address.
 pub fn generate_building_signage(
     editor: &mut WorldEditor,
     way: &ProcessedWay,
@@ -1127,10 +1142,14 @@ pub fn generate_building_signage(
     }
     let name = poi_name_sign(&way.tags, ctx.level).filter(|n| n.key().is_none_or(|k| ctx.has(k)));
     let number = house_number_key(&way.tags, ctx.level).filter(|k| ctx.has(k));
-    let address = way
-        .tags
-        .get("arnis:address")
-        .filter(|s| ctx.level == SignageLevel::Full && !s.trim().is_empty());
+    let address = way.tags.get("arnis:address").filter(|s| {
+        ctx.level == SignageLevel::Full
+            && !s.trim().is_empty()
+            && !way
+                .nodes
+                .iter()
+                .any(|n| n.tags.contains_key("arnis:address"))
+    });
     if name.is_none() && number.is_none() && address.is_none() {
         return;
     }
@@ -1152,7 +1171,13 @@ pub fn generate_building_signage(
             ctx.note("shop name plates", anchor.x, anchor.fascia_y, anchor.z);
         }
     }
-    if let Some(key) = number.as_ref().filter(|_| !address_placed) {
+    if let Some(key) = number.as_ref().filter(|_| {
+        !address_placed
+            && !way
+                .nodes
+                .iter()
+                .any(|n| n.tags.contains_key("arnis:address"))
+    }) {
         // Beside the door at door height, never on it; the plate is one tile wide.
         let (hx, hz) = match anchor.door {
             Some((dx, dz)) => (dx + rx, dz + rz),

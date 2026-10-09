@@ -4,6 +4,8 @@ use crate::coordinate_system::geographic::LLBBox;
 use crate::osm_parser::{self, ProcessedElement, ProcessedMemberRole, ProcessedWay};
 use geo::{Area, BooleanOps, BoundingRect, Contains, LineString, MultiPolygon, Polygon};
 use std::collections::{HashMap, HashSet};
+#[path = "danish_addresses.rs"]
+mod addresses;
 #[path = "danish_entrances.rs"]
 mod entrances;
 
@@ -126,6 +128,9 @@ fn merge(
             })
         })
         .collect();
+    if enrich {
+        addresses::attach(existing, &incoming, &index);
+    }
     let mut uses: HashMap<usize, usize> = HashMap::new();
     for (_, overlaps) in matches.iter().flatten() {
         for (i, _) in overlaps {
@@ -319,6 +324,39 @@ mod tests {
         }
         merge(&mut elements, vec![one, building(3, 0, 0, 10)], true);
         assert!(!elements[0].tags().contains_key("building:levels"));
+    }
+
+    #[test]
+    fn contained_addresses_do_not_assign_one_buildings_style_to_a_whole_row() {
+        let mut one = building(2, 0, 0, 10);
+        let mut two = building(3, 10, 0, 10);
+        for (element, address, lon) in [
+            (&mut one, "Testvej 1, 4200 Slagelse", "11.1"),
+            (&mut two, "Testvej 3, 4200 Slagelse", "11.2"),
+        ] {
+            if let ProcessedElement::Way(w) = element {
+                w.tags.extend(HashMap::from([
+                    ("arnis:address".into(), address.into()),
+                    ("arnis:entrance:lat".into(), "55.1".into()),
+                    ("arnis:entrance:lon".into(), lon.into()),
+                    ("arnis:entrance:standard".into(), "TK".into()),
+                    ("building:material".into(), "brick".into()),
+                ]));
+            }
+        }
+        let incoming = vec![one, two];
+        let mut elements = vec![building(1, 0, 0, 20)];
+        merge(&mut elements, incoming.clone(), true);
+        let hints: Vec<addresses::AddressHint> =
+            serde_json::from_str(&elements[0].tags()[addresses::HINTS]).unwrap();
+        assert_eq!(hints.len(), 2);
+        assert!(!elements[0].tags().contains_key("arnis:address"));
+        assert!(!elements[0].tags().contains_key("building:material"));
+        let mut ambiguous = vec![building(1, 0, 0, 20), building(4, 0, 0, 20)];
+        merge(&mut ambiguous, incoming, true);
+        assert!(ambiguous
+            .iter()
+            .all(|e| !e.tags().contains_key(addresses::HINTS)));
     }
 
     #[test]

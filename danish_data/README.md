@@ -261,10 +261,43 @@ I det nye Slagelse-testkort er alle 930 billedskilterammer kontrolleret med
 adresseskiltes blokentiteter er uændrede. 70 world-editor-tests bestod, samt
 release-build og GUI-check. Fysiktesten dækkede 45 underlagsmaterialer.
 
-### Kendt forbedringspunkt: adresser ved flere indgange
+### Flere adresser og indgange på en samlet OSM-bygning
 
-Ikke alle døre får et adresseskilt. Ud over manglende registerkobling og
-placering kan en bygning have flere døre, mens skiltplaceringen bruger ét
-primært facadeanker. Næste forbedring er at skelne mellem manglende data,
-manglende plads og en sekundær indgang, og knytte en kendt DAR-adresse til
-den rette indgang. Den samme adresse skal ikke ukritisk gentages ved alle døre.
+Et konkret eksempel er OSM-bygning 604610077: OSM har ét omrids, mens
+GeoDanmark har tre bygninger med adresserne Oehlenschlægersgade 2,
+Herrestræde 3 og Herrestræde 7, alle 4200 Slagelse. Den gamle 1:1-regel
+afviste både bygningsoplysninger og adresser her.
+
+`src/danish_addresses.rs` laver nu en separat adressekobling før den normale
+bygningsmerge. Et kvalificeret TD/TK-punkt med fuld adresse kan tilknyttes, når
+mindst 95 procent af dets GeoDanmark-bygnings areal ligger i præcis ét OSM-omrids.
+`building:part` er udelukket. Dette overfører alene adressepunkter og deres
+oprindelige vægsegmenter som det interne JSON-tag `arnis:address_hints`;
+det ændrer ikke reglerne for materialer, etageantal eller omrids. De rå
+Datafordeler-filer og supplementets schema er uændrede.
+
+`src/danish_entrances.rs` vurderer alle punkter mod det oprindelige omrids,
+inden nogen knuder indsættes. En valgt indgang skal også være højst to meter
+(mindst to blokke) fra den oprindelige GeoDanmark-væg. De eksisterende tjek
+for hjørner, afstand, nabobygninger og kortkant gælder stadig. Kandidater,
+som havner mindre end tre blokke fra hinanden, afvises som tvetydige.
+Eksisterende OSM-indgange bevares fortsat. Godkendte knuder indsættes bagfra
+langs hvert segment, så ringens rækkefølge bevares, og hver knude får sin
+egen `arnis:address`. TK er stadig et facadehint, ikke en opmålt dørplacering.
+
+Bygningsgeneratoren sender derefter hvert sådant døranker til
+`generate_entrance_address_sign` efter facade- og karmarbejdet. Det fælles
+bygningsskilt undertrykkes, når der er individuelle adresseskilte på
+indgangsknuderne. Bygninger uden individuelle adressepunkter bruger fortsat
+det eksisterende bygningsskilt. Et skilt med lang tekst kan bruge flere linjer
+eller to skilte; adressens tegn bevares.
+
+Det nye Slagelse-kort blev verificeret med identiske datafiler og område:
+913 almindelige adresseskilte mod 505 før. De tre ovennævnte adresser er
+kontrolleret ved hver sin dør. 1.233 intakte dørpar havde ingen tomme sidefelter.
+Alle 1.492 Rust-tests bestod (18 ignoreret), samt release-build og GUI-check.
+Dette er kontrol af verdensfilen, ikke visuel kontrol i Minecraft.
+
+Manglende eller tvetydige registerkoblinger, eksisterende OSM-indgange uden
+en sikker individuel adressekobling og manglende fysisk skiltplads kan stadig
+give døre uden adresse. En fælles adresse gentages ikke ukritisk ved alle døre.

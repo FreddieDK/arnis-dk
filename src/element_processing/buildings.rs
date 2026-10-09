@@ -8228,6 +8228,30 @@ pub fn generate_buildings(
     // the player would.
     report_wall_segments(editor, element, &config, effective_passages, &wall_segments);
 
+    // A shared OSM outline can have several independently identified DAR addresses.
+    // Keep the label at its own planned entrance, not at the first door of the row.
+    for plan in &entrance_plans {
+        if let Some(address) = element
+            .nodes
+            .iter()
+            .find(|n| n.x == plan.x && n.z == plan.z)
+            .and_then(|n| n.tags.get("arnis:address"))
+        {
+            let base = config.start_y_offset + config.abs_terrain_offset + 1;
+            let anchor = FacadeAnchor {
+                x: plan.x,
+                z: plan.z,
+                normal: plan.normal,
+                fascia_y: base + 3,
+                number_y: base + 1,
+                door: Some((plan.x, plan.z)),
+            };
+            crate::element_processing::signage::generate_entrance_address_sign(
+                editor, element, anchor, address,
+            );
+        }
+    }
+
     facade_anchor(element, &facade, &config, &entrance_plans)
 }
 
