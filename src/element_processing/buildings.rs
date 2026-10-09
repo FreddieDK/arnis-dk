@@ -8257,11 +8257,47 @@ pub fn generate_buildings(
         }
     }
 
+    // A diagonal raster wall may only touch a door at a corner. A cardinal
+    // doorway needs full jambs on both sides, after decoration has finished.
+    for plan in &entrance_plans {
+        if element.nodes.iter().any(|n| {
+            n.x == plan.x
+                && n.z == plan.z
+                && n.tags.get("source:entrance").is_some_and(|s| s == "DAR")
+        }) {
+            finish_dar_doorway(editor, plan, &config);
+        }
+    }
+
     // After every wall and decoration pass, so the seam audit sees the world
     // the player would.
     report_wall_segments(editor, element, &config, effective_passages, &wall_segments);
 
     facade_anchor(element, &facade, &config, &entrance_plans)
+}
+
+/// Close the diagonal gaps beside a DAR doorway without changing other entrances.
+fn finish_dar_doorway(editor: &mut WorldEditor, plan: &EntrancePlan, config: &BuildingConfig) {
+    if plan.double {
+        return;
+    }
+    let (nx, nz) = plan.normal;
+    let (tx, tz) = (-nz, nx);
+    let base = config.start_y_offset + config.abs_terrain_offset + 1;
+    for side in [-1, 1] {
+        let (x, z) = (plan.x + side * tx, plan.z + side * tz);
+        for y in base..=base + 2 {
+            // Do not replace another intentional entrance leaf.
+            if editor
+                .get_block_absolute(x, y, z)
+                .is_some_and(|b| b.name().ends_with("_door"))
+            {
+                continue;
+            }
+            editor.set_block_absolute(config.wall_block, x, y, z, None, Some(&[]));
+        }
+    }
+    editor.set_block_absolute(config.wall_block, plan.x, base + 2, plan.z, None, Some(&[]));
 }
 
 /// Sign anchor: the entrance column, else the middle of the front wall.
@@ -13552,6 +13588,66 @@ mod facade_integration_tests {
             !street_doors,
             "no synthetic door once an entrance is mapped"
         );
+    }
+
+    #[test]
+    fn dar_door_on_diagonal_wall_has_two_closed_jambs() {
+        let xz = XZBBox::rect_from_xz_lengths(70.0, 70.0).unwrap();
+        let road = bitmap_with_rect(&xz, 50, 0, 52, 69);
+        let footprints = CoordinateBitmap::new(&xz);
+        let mut way = rect_way(
+            604609919,
+            20,
+            20,
+            46,
+            41,
+            &[
+                ("building", "yes"),
+                ("building:levels", "1"),
+                ("building:material", "timber_framing"),
+            ],
+        );
+        // Reduced outline of the reported 1C building; the old diagonal shell
+        // leaves the south side of the cardinal door open at (44,25).
+        way.nodes = [(20, 34), (42, 20), (44, 24), (46, 27), (24, 41), (20, 34)]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (x, z))| ProcessedNode {
+                id: i as u64,
+                x,
+                z,
+                tags: if (x, z) == (44, 24) {
+                    HashMap::from([
+                        ("entrance".into(), "yes".into()),
+                        ("source:entrance".into(), "DAR".into()),
+                    ])
+                } else {
+                    HashMap::new()
+                },
+            })
+            .collect();
+        let mut editor = test_editor(&xz);
+        run_building(&mut editor, &way, &road, &footprints);
+        for y in 1..=2 {
+            assert!(editor.check_for_block(44, y, 24, Some(DOOR_BLOCKS)));
+            for z in [23, 25] {
+                let block = editor.get_block_absolute(44, y, z).unwrap();
+                assert_ne!(block, AIR, "open jamb at {y},{z}");
+                assert!(!block.name().ends_with("_door"));
+            }
+            assert!(
+                editor
+                    .get_block_absolute(45, y, 24)
+                    .is_none_or(|b| b == AIR),
+                "outside remains passable"
+            );
+            assert!(
+                editor
+                    .get_block_absolute(43, y, 24)
+                    .is_none_or(|b| b == AIR),
+                "inside remains passable"
+            );
+        }
     }
 
     #[test]

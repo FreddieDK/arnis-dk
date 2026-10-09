@@ -163,6 +163,7 @@ fn merge(
                     "arnis:geodanmark_id",
                     "arnis:bbr_id",
                     "arnis:dar_id",
+                    "arnis:address",
                     "arnis:entrance:lat",
                     "arnis:entrance:lon",
                     "arnis:entrance:standard",

@@ -39,7 +39,10 @@ præcis dørmåling.** Ukvalificerede eller tvetydige punkter beholder Arnis' no
 placering. Se den tekniske vejledning for afstands- og overlapfiltre.
 
 Brug `--signage=full` til testkort med Arnis' egne vej-/trafikskilte,
-bygningsskilte og husnumre. Det kræver ingen ændring af serverplugins i dette
+bygningsskilte og adresser. Når DAR har en fuld adgangsadresse, vises den på
+et almindeligt Minecraft-vægskilt ved indgangen i stedet for billedet med
+kun husnummeret. Lange adresser fordeles på op til to skilte.
+Det kræver ingen ændring af serverplugins i dette
 projekt. Den komplette verden skal bevare både entiteter og `data/map_*.dat`.
 
 ### Hent data til det valgte område

@@ -154,3 +154,39 @@ begge halvdele i de gemte regionfiler. Arnis rapporterede 235 husnumre og
 verdens kortdata. Test: 1.484 Rust-tests bestod (18 ignoreret), 19 Python-tests
 bestod; release-build og GUI-check bestod. Der mangler fortsat visuel kontrol
 i Minecraft mod de virkelige indgange.
+
+
+### Almindelige adresseskilte og karm ved skrå vægge
+
+DAR_Husnummer-feltet `adgangsadressebetegnelse` gemmes som `arnis:address` på
+bygningen og kopieres gennem den samme entydige bygningsmerge. Manglende
+vejnavne og postnumre gættes ikke. Det er adgangsadressen uden lejlighed,
+etage eller beboeroplysninger.
+
+Ved `--signage=full` bruger `generate_building_signage` den komplette tekst
+på et almindeligt `spruce_wall_sign` med en normal sign-blokentitet. Skiltet
+placeres ved siden af døren på en eksisterende massiv væg, aldrig i selve
+åbningen. Det erstatter husnummerets kortbillede, når placeringen lykkes;
+andre Arnis-skilte bruger fortsat upstreams billedskilte. Basic/none får ikke
+adresseskilte. Uden fuld adresse bevares eksisterende husnummerskiltning.
+
+Teksten ombrydes til højst 15 tegn pr. linje og fire linjer pr. skilt. Op til
+to skilte bruges, øverst først, hvis hele adressen kræver flere linjer. Der
+skal være plads til alle sider; ellers bruges det gamle husnummer-fallback.
+Teksten afkortes ikke. Danske bogstaver bevares som Unicode i NBT-teksten.
+
+Fejlen ved Herrestræde 1C kunne reproduceres i regionfilen: døren stod i en
+skrå rastervæg, hvor en side kun havde diagonal kontakt til døren. Efter
+alle facade- og dekorationspas lukker `finish_dar_doorway` nu de to
+karmkolonner og overliggeren ved DAR-indgange med bygningens vægmateriale.
+Selve døren og passagen bevares; andre indgange får ikke denne behandling.
+Regressionstesten bruger den rapporterede bygnings skrå omrids og kontrollerer
+begge karmstolper samt fri passage foran/bagved døren.
+
+
+Verificeret på samme Slagelse-område: 351 almindelige adresseskilte i den
+færdige verdensfil. Skiltet ved Herrestræde 1C indeholder præcis
+"Herrestræde 1C," og "4200 Slagelse" på hver sin linje. Den tidligere åbne
+karmcelle (312,-49,482) er udfyldt, begge dørhalvdele er bevaret, og felterne
+foran og bagved døren er fri. 296 element-/bygningstests bestod (2 ignoreret),
+20 Python-tests bestod; release-build og GUI-check bestod.

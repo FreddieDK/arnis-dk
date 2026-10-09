@@ -20,7 +20,7 @@ FIELDS = {
     'GEODKV': COMMON + ' BBRUUID geometristatus metode3D geometri { wkt crs }',
     'BBR': COMMON + ' husnummer byg021BygningensAnvendelse byg054AntalEtager '
            'byg032YdervaeggensMateriale byg033Tagdaekningsmateriale byg026Opfoerelsesaar',
-    'DAR': COMMON + ' husnummertekst adgangspunkt geoDanmarkBygning',
+    'DAR': COMMON + ' husnummertekst adgangsadressebetegnelse adgangspunkt geoDanmarkBygning',
     'DAR_POINT': COMMON + ' oprindelse_tekniskStandard position { wkt crs }',
 }
 ENTITIES = {'GEODKV': 'GEODKV_Bygning', 'BBR': 'BBR_Bygning', 'DAR': 'DAR_Husnummer',

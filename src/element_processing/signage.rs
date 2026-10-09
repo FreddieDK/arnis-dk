@@ -1031,6 +1031,51 @@ fn right_dir(facing: i8) -> (i32, i32) {
     }
 }
 
+/// Complete addresses use vanilla signs: four lines each, never silently truncated.
+fn place_address_sign(editor: &mut WorldEditor, anchor: &FacadeAnchor, text: &str) -> bool {
+    let lines = split_lines(text, 15, usize::MAX);
+    if lines.is_empty() || lines.len() > 8 {
+        return false;
+    }
+    let pages: Vec<_> = lines.chunks(4).collect();
+    let (nx, nz) = anchor.normal;
+    let facing = WorldEditor::facing_for_normal(nx, nz);
+    let (rx, rz) = right_dir(facing);
+    let (ax, az) = anchor.door.unwrap_or((anchor.x, anchor.z));
+    for offset in [1, -1, 2, -2, 3, -3] {
+        let (x, z) = (ax + rx * offset, az + rz * offset);
+        // Require a solid backing and room for every page before writing any.
+        let fits = (0..pages.len()).all(|p| {
+            let y = anchor.number_y + p as i32;
+            editor.get_block_absolute(x, y, z).is_some_and(|b| {
+                let n = b.name();
+                b != AIR
+                    && !is_see_through(b)
+                    && !n.ends_with("_door")
+                    && !n.ends_with("_stairs")
+                    && !n.ends_with("_slab")
+                    && !n.ends_with("_wall")
+                    && !n.contains("sign")
+            }) && editor.cell_open_at(x + nx, y, z + nz)
+                && !editor.cell_has_frame(x + nx, y, z + nz)
+                && editor.owns(x + nx, z + nz)
+                && y > editor.get_absolute_y(x + nx, 0, z + nz)
+        });
+        if !fits {
+            continue;
+        }
+        for (p, lines) in pages.iter().enumerate() {
+            let refs: Vec<_> = lines.iter().map(String::as_str).collect();
+            let y = anchor.number_y + (pages.len() - 1 - p) as i32;
+            if !editor.place_wall_sign(x, y, z, facing, &refs) {
+                return false;
+            }
+        }
+        return true;
+    }
+    false
+}
+
 /// Facade signs and house number for a building way. Runs after the walls are built.
 pub fn generate_building_signage(
     editor: &mut WorldEditor,
@@ -1049,7 +1094,11 @@ pub fn generate_building_signage(
     }
     let name = poi_name_sign(&way.tags, ctx.level).filter(|n| n.key().is_none_or(|k| ctx.has(k)));
     let number = house_number_key(&way.tags, ctx.level).filter(|k| ctx.has(k));
-    if name.is_none() && number.is_none() {
+    let address = way
+        .tags
+        .get("arnis:address")
+        .filter(|s| ctx.level == SignageLevel::Full && !s.trim().is_empty());
+    if name.is_none() && number.is_none() && address.is_none() {
         return;
     }
     // Ways are processed by every tile they overlap; only the anchor's owner places.
@@ -1059,12 +1108,17 @@ pub fn generate_building_signage(
     let facing = WorldEditor::facing_for_normal(anchor.normal.0, anchor.normal.1);
     let (rx, rz) = right_dir(facing);
 
+    let address_placed = address.is_some_and(|text| place_address_sign(editor, &anchor, text));
+    if address_placed {
+        ctx.note("address signs", anchor.x, anchor.number_y, anchor.z);
+    }
+
     if let Some(name) = &name {
         if place_facade_sign(editor, anchor.x, anchor.fascia_y, anchor.z, facing, name) {
             ctx.note("shop name plates", anchor.x, anchor.fascia_y, anchor.z);
         }
     }
-    if let Some(key) = &number {
+    if let Some(key) = number.as_ref().filter(|_| !address_placed) {
         // Beside the door at door height, never on it; the plate is one tile wide.
         let (hx, hz) = match anchor.door {
             Some((dx, dz)) => (dx + rx, dz + rz),
@@ -2226,6 +2280,65 @@ mod tests {
             split_lines("abcdefghijklmnopqrstu", 10, 4),
             vec!["abcdefghij", "klmnopqrst", "u"]
         );
+    }
+
+    #[test]
+    fn complete_address_signs_keep_danish_letters_and_use_solid_backing() {
+        let xz = XZBBox::rect_from_xz_lengths(40.0, 40.0).unwrap();
+        let mut editor = crate::element_processing::building_test_support::test_editor(&xz);
+        let anchor = FacadeAnchor {
+            x: 20,
+            z: 20,
+            normal: (0, -1),
+            fascia_y: 4,
+            number_y: 2,
+            door: Some((20, 20)),
+        };
+        let text = "Herrestræde 1C, 4200 Slagelse";
+        let lines = split_lines(text, 15, usize::MAX);
+        assert_eq!(lines.join(" "), text);
+        assert!(lines.iter().all(|s| s.chars().count() <= 15));
+        assert!(
+            !place_address_sign(&mut editor, &anchor, text),
+            "no floating signs"
+        );
+        editor.set_block_absolute(STONE_BRICKS, 19, 2, 20, None, None);
+        assert!(place_address_sign(&mut editor, &anchor, text));
+        assert_eq!(editor.get_block_absolute(19, 2, 19), Some(SPRUCE_WALL_SIGN));
+        assert!(
+            editor
+                .get_block_absolute(20, 2, 19)
+                .is_none_or(|b| b == AIR),
+            "door stays clear"
+        );
+    }
+
+    #[test]
+    fn long_address_requires_space_for_every_page_without_truncation() {
+        let xz = XZBBox::rect_from_xz_lengths(40.0, 40.0).unwrap();
+        let mut editor = crate::element_processing::building_test_support::test_editor(&xz);
+        let anchor = FacadeAnchor {
+            x: 20,
+            z: 20,
+            normal: (0, -1),
+            fascia_y: 5,
+            number_y: 2,
+            door: Some((20, 20)),
+        };
+        let text = "En Meget Lang Vej Med Mange Ord 123A, Lille Landsby, 4200 Slagelse";
+        let lines = split_lines(text, 15, usize::MAX);
+        assert_eq!(lines.join(" "), text);
+        assert!(lines.len() > 4 && lines.len() <= 8);
+        editor.set_block_absolute(STONE_BRICKS, 19, 2, 20, None, None);
+        assert!(!place_address_sign(&mut editor, &anchor, text));
+        assert!(editor
+            .get_block_absolute(19, 2, 19)
+            .is_none_or(|b| b == AIR));
+        editor.set_block_absolute(STONE_BRICKS, 19, 3, 20, None, None);
+        assert!(place_address_sign(&mut editor, &anchor, text));
+        for y in [2, 3] {
+            assert_eq!(editor.get_block_absolute(19, y, 19), Some(SPRUCE_WALL_SIGN));
+        }
     }
 
     #[test]

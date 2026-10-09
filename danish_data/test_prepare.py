@@ -93,6 +93,12 @@ class PrepareTests(unittest.TestCase):
             self.assertTrue(55 < float(tags['arnis:entrance:lat']) < 56)
             self.assertFalse(any('entrance' in e.get('tags', {}) for e in doc['elements']))
 
+    def test_complete_address_preserves_danish_text_without_guessing_missing_fields(self):
+        doc=self.run_prepare(dar=[{**self.dar,'adgangsadressebetegnelse':'  Herrestræde 1C,\n4200 Slagelse  '}])
+        tags=next(e['tags'] for e in doc['elements'] if e['type']=='way')
+        self.assertEqual(tags['arnis:address'],'Herrestræde 1C, 4200 Slagelse')
+        self.assertFalse(any('arnis:address' in e.get('tags',{}) for e in self.run_prepare()['elements']))
+
     def test_unqualified_wrong_building_and_broken_access_links_are_ignored(self):
         cases = [self.access(s) for s in ('TN','UF','TA')]
         cases += [self.access(x=650100), {**self.access(), 'geoDanmarkBygning':'other'},

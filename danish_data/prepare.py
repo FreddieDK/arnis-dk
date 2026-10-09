@@ -198,6 +198,10 @@ def prepare(geodanmark, bbr=None, dar=None, bbox=None, at=None):
                 tags["arnis:dar_id"] = identity(address["id_lokalId"])
                 if address.get("husnummertekst"):
                     tags["addr:housenumber"] = address["husnummertekst"]
+                full_address = address.get('adgangsadressebetegnelse')
+                if isinstance(full_address, str) and full_address.strip():
+                    # Preserve the official address; never infer street/postcode.
+                    tags['arnis:address'] = ' '.join(full_address.split())
                 counts["dar_matches"] += 1
                 hint = entrance_tags(address, key, geometry, at)
                 tags.update(hint)
