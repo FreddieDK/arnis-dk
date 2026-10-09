@@ -227,3 +227,44 @@ Herrestræde 1C er kontrolleret igen: skiltet indeholder "Herrestræde 1C," og
 bevares ved karmreparationen. Manglende adresseskilte kan fortsat skyldes
 manglende/ikke-entydig registerkobling, manglende facadeanker eller manglende
 plads til alle tekstens sider; der opfindes ingen adresser eller underlag.
+
+### Billedskilte i survival
+
+`WorldEditor::place_map_decal_ex` skriver nu `Fixed=0` på almindelige og
+lysende item frames. Tidligere `Fixed=1` gjorde billedskiltene modstandsdygtige
+over for survival-slag og lod dem overleve uden blokken bag billedet.
+Nu kan et slag fjerne billedet, og fjernes den bærende blok direkte bag rammen,
+forsvinder rammen ved spillets normale fysikkontrol. Et tomt frame følger
+Minecrafts normale adfærd. `Invisible=1` og `ItemDropChance=0` bevares, så
+grafikken vises uden synlig ramme og ikke efterlader et løst kort-item.
+Almindelige adresseskilte er sign-blokke og var allerede nedbrydelige.
+
+Rettelsen kræver intet serverplugin og gælder nygenererede Java-verdener.
+Eksisterende rammer ændres ikke automatisk. Man kan rette en afgrænset del
+af et gammelt testkort ved at stå ved skiltene og køre begge kommandoer med
+operatørrettigheder (de ændrer alle rammer af den angivne type inden for 16 blokke):
+
+```mcfunction
+/execute as @e[type=minecraft:item_frame,distance=..16] run data merge entity @s {Fixed:0b}
+/execute as @e[type=minecraft:glow_item_frame,distance=..16] run data merge entity @s {Fixed:0b}
+```
+
+Fysikken er afprøvet på en isoleret lokal Paper 26.2-testserver med samtlige
+underlagsmaterialer fundet bag rammerne i Slagelse-kortet, inklusive halve
+blokke, trapper og glas. Rammerne blev hængende med underlag; ikke-creative
+skade fjernede billedet, mens en låst kontrolramme modstod skaden. Efter
+fjernelse af underlaget forsvandt alle testens rammer. Det er en automatisk
+spiltest, ikke en visuel test med en indlogget spiller. Testserveren er stoppet.
+
+I det nye Slagelse-testkort er alle 930 billedskilterammer kontrolleret med
+`Fixed=0`; placering, kort-id, rotation og grafik er bevaret. De 505 normale
+adresseskiltes blokentiteter er uændrede. 70 world-editor-tests bestod, samt
+release-build og GUI-check. Fysiktesten dækkede 45 underlagsmaterialer.
+
+### Kendt forbedringspunkt: adresser ved flere indgange
+
+Ikke alle døre får et adresseskilt. Ud over manglende registerkobling og
+placering kan en bygning have flere døre, mens skiltplaceringen bruger ét
+primært facadeanker. Næste forbedring er at skelne mellem manglende data,
+manglende plads og en sekundær indgang, og knytte en kendt DAR-adresse til
+den rette indgang. Den samme adresse skal ikke ukritisk gentages ved alle døre.

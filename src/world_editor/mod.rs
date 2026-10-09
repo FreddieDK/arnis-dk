@@ -773,7 +773,9 @@ impl<'a> WorldEditor<'a> {
         );
         extra.insert("Item".to_string(), Value::Compound(item));
         extra.insert("ItemDropChance".to_string(), Value::Float(0.0));
-        extra.insert("Fixed".to_string(), Value::Byte(1));
+        // Use normal hanging-entity physics: survival hits can remove the art,
+        // and removing its supporting block must not leave a floating map.
+        extra.insert("Fixed".to_string(), Value::Byte(0));
         extra.insert("Invisible".to_string(), Value::Byte(1));
         extra.insert("TileX".to_string(), Value::Int(fx));
         extra.insert("TileY".to_string(), Value::Int(fy));
