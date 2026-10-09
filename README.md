@@ -29,7 +29,18 @@ Danske bygningsdata kan nu hentes automatisk for et valgt område via
 | --- | --- |
 | GeoDanmark Vektor / Bygning | Omrids, inklusive multipolygoner og gårdrum |
 | BBR / Bygning | Anvendelse, etager, materialer, opførelsesår |
-| DAR / Husnummer | Husnummer knyttet til BBR-bygningens adresse-id |
+| DAR / Husnummer + Adressepunkt | Husnummer og kvalificeret dør-/facadeplacering via adgangspunkt |
+
+Dørplacering bruger nu DAR-adgangspunkter med standard **TD** (ved indgangsdør)
+eller **TK** (ved facade mod vej). Der kræves en direkte GeoDanmark-kobling og
+et punkt inde i den tilknyttede bygning. Punktet flyttes til en nærliggende,
+entydig væg; eksisterende OSM-indgange bevares. **TK er et facadehint, ikke en
+præcis dørmåling.** Ukvalificerede eller tvetydige punkter beholder Arnis' normale
+placering. Se den tekniske vejledning for afstands- og overlapfiltre.
+
+Brug `--signage=full` til testkort med Arnis' egne vej-/trafikskilte,
+bygningsskilte og husnumre. Det kræver ingen ændring af serverplugins i dette
+projekt. Den komplette verden skal bevare både entiteter og `data/map_*.dat`.
 
 ### Hent data til det valgte område
 
@@ -101,7 +112,8 @@ fletning og kontrolleres også mod danske omrids og multipolygoner.
 
 GeoDanmarks absolutte Z-koter tolkes **ikke** som bygningshøjder. Etageantal er
 registerdata, mens Arnis' deraf afledte højde stadig er et skøn. DAR tilføjer
-husnummer, men opretter ikke nye døre eller påstår præcise dørplaceringer.
+husnummer og kan nu forbedre indgangens placering med kvalificerede
+adgangspunkter; det er ikke en garanti for præcis dørplacering.
 Importen håndterer ikke BBR-enheder, ejeroplysninger eller persondata.
 
 Den forberedte JSON gemmer kildefilernes navne, SHA-256, tidspunkt, optællinger

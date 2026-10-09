@@ -21,6 +21,29 @@ def page(register, rows, more=False, cursor=None):
 
 
 class FetchTests(unittest.TestCase):
+    def test_access_point_is_joined_by_its_id_with_same_snapshot(self):
+        records = {
+            'GEODKV':[{'id_lokalId':'geo','status':'Anlagt','geometristatus':'Endelig','BBRUUID':'bbr',
+                      'geometri':{'crs':25832,'wkt':'POLYGON EMPTY'}}],
+            'BBR':[{'id_lokalId':'bbr','status':'6','husnummer':'dar'}],
+            'DAR':[{'id_lokalId':'dar','status':'3','adgangspunkt':'POINT-1'}],
+            'DAR_POINT':[{'id_lokalId':'point-1','status':'8','oprindelse_tekniskStandard':'TD',
+                          'position':{'wkt':'POINT (650005 6150003)','crs':25832}}]}
+        def transport(register,query,variables,key):
+            self.assertEqual(variables['at'],NOW.isoformat())
+            if register=='DAR_POINT':
+                self.assertEqual(variables['where']['id_lokalId']['in'],['point-1'])
+                self.assertIn('DAR_Adressepunkt',query)
+            return page(register,records[register])
+        _,_,dar,_=fetch(BBOX,'secret',NOW,transport)
+        self.assertEqual(dar[0]['_arnis_adgangspunkt'],records['DAR_POINT'][0])
+        records['DAR_POINT'][0]['status']='9'
+        self.assertIsNone(fetch(BBOX,'secret',NOW,transport)[2][0]['_arnis_adgangspunkt'])
+        records['DAR_POINT'][0]['status']='8'
+        records['DAR_POINT'].append(records['DAR_POINT'][0].copy())
+        with self.assertRaisesRegex(ValueError,'ambiguous'):
+            fetch(BBOX,'secret',NOW,transport)
+
     def test_bounded_query_and_uuid_joins_normalize_api_fields(self):
         calls = []
         outline = {'id_lokalId': 'geo-1', 'BBRUUID': 'BBR-1', 'status': 'Anlagt',

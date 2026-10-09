@@ -79,6 +79,32 @@ class PrepareTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "array"):
             list(rows(path))
 
+    def access(self, standard='TD', x=650005, y=6150003):
+        return {**self.dar, 'adgangspunkt': 'point-1', 'geoDanmarkBygning': 'GEODK-1',
+                '_arnis_adgangspunkt': {'id_lokalId': 'point-1', 'status': '8',
+                    'oprindelse_tekniskStandard': standard,
+                    'position': {'crs': 25832, 'wkt': f'POINT ({x} {y})'}}}
+
+    def test_qualified_access_points_are_hints_not_unprojected_osm_doors(self):
+        for standard in ('TD', 'TK'):
+            doc = self.run_prepare(dar=[self.access(standard)])
+            tags = next(e['tags'] for e in doc['elements'] if e['type']=='way')
+            self.assertEqual(tags['arnis:entrance:standard'], standard)
+            self.assertTrue(55 < float(tags['arnis:entrance:lat']) < 56)
+            self.assertFalse(any('entrance' in e.get('tags', {}) for e in doc['elements']))
+
+    def test_unqualified_wrong_building_and_broken_access_links_are_ignored(self):
+        cases = [self.access(s) for s in ('TN','UF','TA')]
+        cases += [self.access(x=650100), {**self.access(), 'geoDanmarkBygning':'other'},
+                  {**self.access(), 'adgangspunkt':'other'}, {**self.access(), 'geoDanmarkBygning':None}]
+        for field,value in [('status','9'),('position',{'crs':4326,'wkt':'POINT (11 55)'}),
+                            ('position',{'crs':25832,'wkt':'broken'}),
+                            ('virkningTil',self.at.isoformat())]:
+            row=self.access();row['_arnis_adgangspunkt'][field]=value;cases.append(row)
+        for row in cases:
+            doc=self.run_prepare(dar=[row])
+            self.assertFalse(any('arnis:entrance:lat' in e.get('tags',{}) for e in doc['elements']))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -45,7 +45,7 @@ Verificeret 9. oktober 2026 med læsende forespørgsler:
 | --- | --- | --- |
 | GeoDanmark | `https://graphql.datafordeler.dk/GEODKV/v2` | Bygnings-ID, BBRUUID, status/tider, geometristatus, metode3D, WKT/CRS |
 | BBR | `https://graphql.datafordeler.dk/BBR/v2` | Bygnings-ID, husnummer-ID, status/tider, anvendelse, etager, materialer, opførelsesår |
-| DAR | `https://graphql.datafordeler.dk/DAR/v2` | Husnummer-ID, status/tider, husnummertekst |
+| DAR | `https://graphql.datafordeler.dk/DAR/v2` | Husnummer-ID, husnummertekst, GeoDanmark-link og adgangspunkt; Adressepunkt-position og teknisk standard |
 
 Der hentes ikke ejere, beboere eller BBR-enheder. Ældre dokumentation viser
 BBR/DAR v1; disse adresser svarede 404 under testen. Brug v2.
@@ -92,3 +92,65 @@ Tilpasningen til 3.3.0 bruger upstreams `ProjectionSpec::from_args` ved import
 og bevarer oprydning af One World-kørsler ved importfejl. Terrænlogikken er
 uændret fra upstream. Kontrol: 1.480 Rust-tests bestod (18 ignoreret), og alle
 16 Python-tests bestod.
+
+
+## DAR-styrede indgange og indbyggede skilte (9. oktober 2026)
+
+`fetch.py` henter nu `adgangspunkt` og `geoDanmarkBygning` på de samme
+UUID-koblede DAR_Husnummer-poster og følger adgangspunktets UUID til
+`DAR_Adressepunkt` på DAR/v2. Samme snapshot-tid og 100-ID-batchgrænse gælder.
+Punktet skal have status 8 (i brug). Den fulde punktpost gemmes i det lokale,
+normaliserede DAR-Husnummer-snapshot som `_arnis_adgangspunkt`; dette er vores
+eget indlejringsfelt, ikke et officielt felt i Husnummer-udtrækket. Gamle
+udtræk uden punktpost virker fortsat, men forbedrer ikke dørplaceringen.
+
+`prepare.py` accepterer kun TD (ved indgangsdør) og TK (ved vejvendt facade).
+TN (blot indenfor bygningen), UF og TA bruges ikke til døre. Punkt-ID skal
+matche Husnummerets adgangspunkt, og `geoDanmarkBygning` skal matche den
+aktuelle GeoDanmark-bygnings ID. Dette forhindrer, at et fælles husnummer på
+BBR-bygninger giver hoveddøre på alle ejendommens garager og udhuse. Punktets
+EPSG:25832-geometri skal være et gyldigt punkt inde i bygningspolygonen.
+
+Supplementet får `arnis:entrance:lat`, `arnis:entrance:lon` og
+`arnis:entrance:standard`. Disse føres med gennem den eksisterende entydige
+OSM/GeoDanmark-sammenkædning. Efter bygningsmerge anvender
+`src/danish_entrances.rs` samme `ProjectionSpec` som resten af Arnis og:
+
+- Bevarer alle eksisterende OSM-entrance/door-annotationer på omridset.
+- Accepterer kun en nærliggende væg, højst 6 meter plus én blok til afrunding.
+- Afviser uklare valg mellem vægge, punkter ved hjørner og afklippede kortkanter.
+- Afviser vægge, hvis trinnet udenfor går ind i en anden kendt bygning.
+- Indsætter højst én DAR-indgang pr. matchet bygning som en normal `entrance=yes`
+  node på omridset. Multipolygoner og gårdrum bevares.
+
+Arnis' eksisterende mapped-entrance-kode bygger derefter selve døren og bruger
+indgangen som anker for husnummerskiltet. Vi ændrer ikke upstreams generelle
+facade- eller skiltegenerator. Indvendige dørpunkter og alle øvrige adresser på
+en bygning hentes ikke; dette er en forbedring af den BBR-koblede adgang,
+ikke en komplet registrering af alle indgange. Afviste hints falder tilbage
+til Arnis' normale dørvalg. TD og TK ligger typisk ca. 3 meter inde i bygningen;
+selv TD giver derfor ikke en garanti for præcis dørplacering i blokgitteret.
+
+Brug `--debug` for loglinjer med DAR-indgangens bygnings-ID, TD/TK og X/Z.
+`--signage=full` aktiverer upstreams egne husnumre, bygningsskilte og offentlig
+skiltning. Bevar `entities/` og `data/map_*.dat` sammen med `region/`, hvis den
+færdige verden flyttes. Denne ændring deployer ingen plugins og tilkobler
+ikke Creative-/GeoGuessr-workers.
+
+Kontrol omfatter Python-tests for de nye UUID-links, status, forkert bygning,
+CRS og kvalitetsklasser samt Rust-tests for placering, eksisterende indgange,
+tvetydige punkter, nabovægge og multipolygoner.
+
+Kilder: [DAR teknisk standard](https://danmarksadresser.dk/adressedata/datakvalitet-hele-landet/teknisk-standard-adgangspunkter),
+[DAR livscyklus](https://danmarksadresser.dk/adressedata/kodelister/livscyklus),
+[officielt GraphQL-skema](https://datafordeler.dk/GraphQLSchema/DAR.graphql).
+
+
+Slagelse-kontrol: samme 1.011 x 1.001-blokke-område blev genereret med
+`--signage=full`. 29 TD- og 869 TK-hints i supplementet blev til 1 TD- og
+175 TK-indgange efter importens filtre. Alle 176 blev bekræftet som døre med
+begge halvdele i de gemte regionfiler. Arnis rapporterede 235 husnumre og
+138 bygningsnavneskilte. Alle 1.165 map-item-frame-referencer kunne findes i
+verdens kortdata. Test: 1.484 Rust-tests bestod (18 ignoreret), 19 Python-tests
+bestod; release-build og GUI-check bestod. Der mangler fortsat visuel kontrol
+i Minecraft mod de virkelige indgange.

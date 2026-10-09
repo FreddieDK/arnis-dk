@@ -20,9 +20,11 @@ FIELDS = {
     'GEODKV': COMMON + ' BBRUUID geometristatus metode3D geometri { wkt crs }',
     'BBR': COMMON + ' husnummer byg021BygningensAnvendelse byg054AntalEtager '
            'byg032YdervaeggensMateriale byg033Tagdaekningsmateriale byg026Opfoerelsesaar',
-    'DAR': COMMON + ' husnummertekst',
+    'DAR': COMMON + ' husnummertekst adgangspunkt geoDanmarkBygning',
+    'DAR_POINT': COMMON + ' oprindelse_tekniskStandard position { wkt crs }',
 }
-ENTITIES = {'GEODKV': 'GEODKV_Bygning', 'BBR': 'BBR_Bygning', 'DAR': 'DAR_Husnummer'}
+ENTITIES = {'GEODKV': 'GEODKV_Bygning', 'BBR': 'BBR_Bygning', 'DAR': 'DAR_Husnummer',
+            'DAR_POINT': 'DAR_Adressepunkt'}
 ALIASES = {'byg032YdervaeggensMateriale': 'byg032YdervæggensMateriale',
            'byg033Tagdaekningsmateriale': 'byg033Tagdækningsmateriale',
            'byg026Opfoerelsesaar': 'byg026Opførelsesår'}
@@ -53,7 +55,8 @@ def bounds(value):
 
 def request_page(register, query, variables, key):
     # Never include the authenticated URL or raw HTTP exception in logs/errors.
-    url = f'https://graphql.datafordeler.dk/{register}/v2?' + urlencode({'apiKey': key})
+    endpoint = 'DAR' if register == 'DAR_POINT' else register
+    url = f'https://graphql.datafordeler.dk/{endpoint}/v2?' + urlencode({'apiKey': key})
     body = json.dumps({'query': query, 'variables': variables}).encode()
     for attempt in range(3):
         request = Request(url, data=body, headers={'Content-Type': 'application/json', 'User-Agent': 'Arnis-DK/0.1'})
@@ -146,6 +149,18 @@ def fetch(bbox, key, at=None, transport=request_page):
     bbr = linked_rows('BBR', [row.get('BBRUUID') for row in converted], at, key, transport)
     bbr = [{ALIASES.get(k, k): v for k, v in row.items()} for row in bbr if active(row, '6', at)]
     dar = linked_rows('DAR', [row.get('husnummer') for row in bbr], at, key, transport)
+    dar = [row for row in dar if active(row, '3', at)]
+    points = linked_rows('DAR_POINT', [row.get('adgangspunkt') for row in dar], at, key, transport)
+    point_index = {}
+    for point in points:
+        if not active(point, '8', at):
+            continue
+        point_id = identity(point['id_lokalId'])
+        if point_id in point_index:
+            raise ValueError('DAR: ambiguous current access point')
+        point_index[point_id] = point
+    # Embed the exact linked record in the normalized local Husnummer snapshot.
+    dar = [{**row, '_arnis_adgangspunkt': point_index.get(identity(row.get('adgangspunkt')))} for row in dar]
     return converted, bbr, dar, at
 
 

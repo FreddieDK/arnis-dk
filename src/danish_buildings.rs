@@ -4,6 +4,8 @@ use crate::coordinate_system::geographic::LLBBox;
 use crate::osm_parser::{self, ProcessedElement, ProcessedMemberRole, ProcessedWay};
 use geo::{Area, BooleanOps, BoundingRect, Contains, LineString, MultiPolygon, Polygon};
 use std::collections::{HashMap, HashSet};
+#[path = "danish_entrances.rs"]
+mod entrances;
 
 fn ring(way: &ProcessedWay) -> LineString<f64> {
     LineString::from(
@@ -161,6 +163,9 @@ fn merge(
                     "arnis:geodanmark_id",
                     "arnis:bbr_id",
                     "arnis:dar_id",
+                    "arnis:entrance:lat",
+                    "arnis:entrance:lon",
+                    "arnis:entrance:standard",
                 ] {
                     if let Some(value) = element.tags().get(key) {
                         if !tags.contains_key(key) {
@@ -234,6 +239,7 @@ pub fn apply(
     }
     let (added, filled, skipped) = merge(elements, incoming, true);
     println!("Danish buildings: {added} added, {filled} enriched, {skipped} overlapping footprints omitted");
+    entrances::apply(elements, args, bbox)?;
     Ok(())
 }
 

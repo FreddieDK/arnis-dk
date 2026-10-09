@@ -12,6 +12,7 @@ import zipfile
 import ijson
 from pyproj import Transformer
 from shapely import force_2d, from_wkt
+from shapely.errors import GEOSException
 from shapely.geometry import box
 from shapely.ops import transform
 
@@ -30,6 +31,38 @@ USES = {"110": "farm", "120": "detached", "130": "terrace", "131": "terrace",
 
 def identity(value):
     return str(value or "").strip().rstrip("/").rsplit("/", 1)[-1].lower()
+
+
+def entrance_tags(address, geodanmark_id, geometry, at):
+    """TD is near a door; TK only identifies the road-facing facade. Never use TN."""
+    point = address.get('_arnis_adgangspunkt')
+    if not isinstance(point, dict) or not active(point, '8', at):
+        return {}
+    if not identity(address.get('adgangspunkt')) or identity(point.get('id_lokalId')) != identity(address['adgangspunkt']):
+        return {}
+    standard = point.get('oprindelse_tekniskStandard')
+    if standard not in ('TD', 'TK'):
+        return {}
+    # A shared BBR address is not a door on every shed on the property.
+    if identity(address.get('geoDanmarkBygning')) != geodanmark_id:
+        return {}
+    position = point.get('position')
+    if not isinstance(position, dict) or position.get('crs') != 25832:
+        return {}
+    try:
+        p = force_2d(from_wkt(position.get('wkt', '')))
+        if p.geom_type != 'Point' or p.is_empty or not p.is_valid:
+            return {}
+        lon, lat = Transformer.from_crs(25832, 4326, always_xy=True).transform(p.x, p.y)
+        if not (math.isfinite(lon) and math.isfinite(lat)):
+            return {}
+        # The official point belongs inside this building, typically ~3 m in.
+        if not geometry.covers(from_wkt(f'POINT ({lon} {lat})')):
+            return {}
+    except (ValueError, TypeError, GEOSException):
+        return {}
+    return {'arnis:entrance:lat': str(lat), 'arnis:entrance:lon': str(lon),
+            'arnis:entrance:standard': standard}
 
 
 def active(row, status, at):
@@ -166,6 +199,10 @@ def prepare(geodanmark, bbr=None, dar=None, bbox=None, at=None):
                 if address.get("husnummertekst"):
                     tags["addr:housenumber"] = address["husnummertekst"]
                 counts["dar_matches"] += 1
+                hint = entrance_tags(address, key, geometry, at)
+                tags.update(hint)
+                if hint:
+                    counts['entrance_hints_' + hint['arnis:entrance:standard']] += 1
         polygons = [geometry] if geometry.geom_type == "Polygon" else list(geometry.geoms)
         if len(polygons) == 1 and not polygons[0].interiors:
             way(key + "/outline", polygons[0].exterior, tags)
