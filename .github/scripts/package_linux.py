@@ -16,7 +16,7 @@ subprocess.run(['strip', str(package / 'arnis')], check=True)
 (package / 'arnis').chmod(0o755)
 for name in ['LICENSE', 'NOTICE', 'README-LINUX.md']:
     shutil.copy2(root / name, package / name)
-for name in ['fetch.py', 'prepare.py', 'meld_bridge.py', 'requirements.txt', 'README.md', 'MELD.md']:
+for name in ['fetch.py', 'prepare.py', 'meld_bridge.py', 'ocean_mask.py', 'requirements.txt', 'README.md', 'MELD.md', 'OCEAN.md']:
     target = package / 'danish_data' / name
     target.parent.mkdir(exist_ok=True)
     shutil.copy2(root / 'danish_data' / name, target)

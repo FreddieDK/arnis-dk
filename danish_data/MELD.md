@@ -1,5 +1,9 @@
 # Store områder med Meld og Arnis-DK
 
+**Hav som void:** Med `plan --land-mask FILE` kan rene havfelter springes over
+før hentning og generering. Land og som standard cirka 1 km kyststribe bevares.
+Se [opsætning og begrænsninger for havfilteret](OCEAN.md).
+
 Eksperimentel kommandolinjeintegration. Meld er en **ekstern afhængighed**:
 vi bruger dets områdeplanlægning, mens Arnis-DK genererer delområderne i sin
 indbyggede One World-verden. Der kopieres ikke Meld-kode ind i dette repository.

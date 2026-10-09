@@ -45,6 +45,7 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(cmd[cmd.index('--signage') + 1], 'full')
         self.assertEqual(cmd[cmd.index('--danish-buildings') + 1], 'buildings.json')
         self.assertIn('--caves', cmd)
+        self.assertEqual(cmd[cmd.index('--world-type') + 1], 'void')
         self.assertNotIn('--master-origin-lat', cmd)
 
     def test_resume_skips_completed_cells_and_retries_failed_cells(self):
@@ -54,7 +55,7 @@ class BridgeTests(unittest.TestCase):
                    'threads': 1, 'scale': 1, 'signage': 'full', 'caves': False,
                    'danish_buildings': {'path': 'buildings.json'},
                    'cells': [{'id': str(i), 'meld_cell': str(i), 'bbox': [55, 11, 55.001, 11.001],
-                              'status': s} for i, s in enumerate(['complete', 'failed', 'pending'])]}
+                              'status': s} for i, s in enumerate(['complete', 'failed', 'pending', 'skipped_ocean'])]}
             bridge.atomic_json(job / 'plan.json', doc)
             args = argparse.Namespace(job=job, limit=1, timeout=60, credentials_file=None)
             with patch.object(bridge, 'verify_inputs'), patch.object(bridge, 'probe'), \
@@ -65,7 +66,7 @@ class BridgeTests(unittest.TestCase):
                 self.assertEqual(process.call_count, 1)
                 self.assertNotIn('DATAFORDELER_API_KEY', process.call_args.kwargs['env'])
             self.assertEqual([c['status'] for c in bridge.read_json(job/'plan.json')['cells']],
-                             ['complete', 'complete', 'pending'])
+                             ['complete', 'complete', 'pending', 'skipped_ocean'])
             with patch.object(bridge, 'verify_inputs'), patch.object(bridge, 'probe'), \
                     patch.object(bridge, 'validate_result'), \
                     patch.object(bridge.subprocess, 'run') as process:

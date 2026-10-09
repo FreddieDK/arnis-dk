@@ -147,3 +147,7 @@ og kan genoptage afbrudte job. Ni dele på cirka 6,5 km² er afprøvet.
 Det er endnu ikke Melds parallelle GUI-workflow.
 
 Se [opsætning, testresultater og begrænsninger](danish_data/MELD.md).
+
+Store planer kan nu springe åbent hav over med `--land-mask`. Land og en
+kyststribe bevares; de oversprungne felter bliver void mellem øerne.
+Se [havfilter, klargøring og kontrolresultater](danish_data/OCEAN.md).

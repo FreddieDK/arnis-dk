@@ -13,7 +13,7 @@ import sys
 import tempfile
 import types
 
-SCHEMA = 1
+SCHEMA = 2  # Older runners must not accidentally generate skipped_ocean cells.
 WORLD_NAME = 'Arnis-DK Meld'
 
 
@@ -77,7 +77,7 @@ def external_meld(path):
 def probe(executable):
     result = subprocess.run([str(executable), '--help'], capture_output=True, text=True,
                             encoding='utf-8', errors='replace', timeout=30, check=True)
-    required = ['--one-world', '--world-name', '--danish-buildings', '--mode', '--signage']
+    required = ['--one-world', '--world-name', '--danish-buildings', '--mode', '--signage', '--world-type']
     missing = [flag for flag in required if flag not in result.stdout]
     if missing:
         raise ValueError('This binary is not a compatible Arnis-DK: ' + ', '.join(missing))
@@ -100,12 +100,19 @@ def plan(args):
     if job.exists():
         raise ValueError('Choose a new job directory; use run to resume an existing job')
     bounds = bbox(args.bbox)
+    from ocean_mask import LandMask
+    mask_record = input_record(args.land_mask) if args.land_mask else None
+    mask = LandMask(mask_record['path']) if mask_record else None
+    if not math.isfinite(args.coast_buffer_m) or not 0 <= args.coast_buffer_m <= 10000:
+        raise ValueError('Coast buffer must be between 0 and 10000 metres')
+    keep_areas = [bbox(value) for value in args.keep_bbox]
     grid, hashes = external_meld(args.meld_source)
     probe(args.arnis.resolve())
     s, w, n, e = bounds
     origin = {'lat': s, 'lon': w}
     cells = grid.cells_for_bbox(dict(south=s, west=w, north=n, east=e), origin,
-                               args.scale, args.cell_regions, max_cells=args.max_cells)
+                               args.scale, args.cell_regions,
+                               max_cells=200000 if mask else args.max_cells)
     supplement = input_record(args.danish_buildings) if args.danish_buildings else None
     coverage = read_json(supplement['path'])['arnis_dk']['bbox'] if supplement else None
     tasks = []
@@ -113,25 +120,38 @@ def plan(args):
         b = cell['bbox']
         area = [max(s, b['south']), max(w, b['west']), min(n, b['north']), min(e, b['east'])]
         data_bbox = padded(area, args.scale)
-        if supplement:
+        intersects_keep = any(area[0] <= k[2] and area[2] >= k[0] and area[1] <= k[3]
+                              and area[3] >= k[1] for k in keep_areas)
+        ocean = bool(mask and not intersects_keep and mask.is_open_sea(data_bbox, args.coast_buffer_m))
+        if ocean:
+            pass  # No Danish data request or coverage requirement for skipped sea cells.
+        elif supplement:
             if not coverage or not contains(coverage, data_bbox):
                 raise ValueError('Prepared Danish supplement must cover all cells INCLUDING padding')
         else:
             download_bounds(','.join(map(str, data_bbox)))  # retains the 10 km2 safety limit
         tasks.append({'id': f'{i:05d}', 'meld_cell': cell['cell_key'], 'bbox': area,
-                      'data_bbox': data_bbox, 'status': 'pending'})
+                      'data_bbox': data_bbox, 'status': 'skipped_ocean' if ocean else 'pending'})
     if not tasks:
         raise ValueError('Meld returned an empty plan')
+    kept = sum(c['status'] != 'skipped_ocean' for c in tasks)
+    if kept > args.max_cells:
+        raise ValueError(f'{kept} retained cells exceed --max-cells {args.max_cells}; reduce the area or raise the limit')
+    if mask_record and digest(mask_record['path']) != mask_record['sha256']:
+        raise ValueError('Land mask changed while planning; retry with an unchanged file')
     document = {'schema': SCHEMA, 'snapshot': datetime.now(timezone.utc).isoformat(),
                 'meld_source': str(args.meld_source.resolve()), 'meld_hashes': hashes,
                 'arnis': input_record(args.arnis), 'bbox': bounds, 'scale': args.scale,
                 'threads': args.threads, 'caves': args.caves, 'signage': args.signage,
                 'danish_buildings': supplement,
+                'land_mask': mask_record, 'coast_buffer_m': args.coast_buffer_m,
+                'keep_bbox': keep_areas,
                 'osm_file': input_record(args.osm_file) if args.osm_file else None,
                 'world_name': WORLD_NAME, 'cells': tasks}
     job.mkdir(parents=True)
     atomic_json(job / 'plan.json', document)
-    print(f'Planned {len(tasks)} cells; no data downloaded and no world generated.')
+    print(f'Planned {kept} cells; skipped {len(tasks)-kept} open-sea cells (void).')
+    print('No data downloaded and no world generated.')
     print(f'Run: python danish_data/meld_bridge.py run --job "{job}"')
 
 
@@ -151,12 +171,12 @@ def job_lock(job):
 
 
 def verify_inputs(document):
-    if document.get('schema') != SCHEMA:
+    if document.get('schema') not in (1, SCHEMA):
         raise ValueError('Unsupported job format')
     _, hashes = external_meld(document['meld_source'])
     if hashes != document['meld_hashes']:
         raise ValueError('External Meld grid changed; use the original checkout to resume')
-    for key in ['arnis', 'danish_buildings', 'osm_file']:
+    for key in ['arnis', 'danish_buildings', 'osm_file', 'land_mask']:
         record = document.get(key)
         if record and digest(record['path']) != record['sha256']:
             raise ValueError(f'{key} changed since planning; create a new job')
@@ -187,6 +207,7 @@ def command(document, cell, job, supplement):
     cmd = [document['arnis']['path'], '--one-world', '--world-name', document['world_name'],
            '--output-dir', str(job / 'worlds'), '--bbox', ','.join(map(str, cell['bbox'])),
            '--scale', str(document['scale']), '--mode', 'geo-terrain',
+           '--world-type', 'void',
            '--signage', document['signage'], '--map-item=false',
            '--danish-buildings', str(supplement)]
     if document.get('osm_file'):
@@ -217,14 +238,17 @@ def run(args):
         document = read_json(job / 'plan.json')
         verify_inputs(document)
         probe(document['arnis']['path'])
-        cells = [c for c in document['cells'] if c['status'] != 'complete']
+        allowed = {'pending', 'running', 'failed', 'complete', 'skipped_ocean'}
+        if any(c['status'] not in allowed for c in document['cells']):
+            raise ValueError('Unknown cell status in plan')
+        cells = [c for c in document['cells'] if c['status'] not in ('complete', 'skipped_ocean')]
         world = job / 'worlds' / document['world_name']
         if any(c['status'] == 'complete' for c in document['cells']):
             for cell in document['cells']:
                 if cell['status'] == 'complete':
                     validate_result(world, cell)
         if not cells:
-            print('All cells are already complete; nothing generated.')
+            print('No pending land/coastal cells; nothing generated (open sea stays void).')
             return
         key = None if document.get('danish_buildings') else load_key(args.credentials_file)
         env = os.environ.copy()
@@ -253,7 +277,8 @@ def run(args):
                 atomic_json(job / 'plan.json', document)
                 raise
             atomic_json(job / 'plan.json', document)
-        print(f"Complete: {sum(c['status'] == 'complete' for c in document['cells'])}/{len(document['cells'])}")
+        skipped = sum(c['status'] == 'skipped_ocean' for c in document['cells'])
+        print(f"Complete: {sum(c['status'] == 'complete' for c in document['cells'])}/{len(document['cells'])-skipped}; skipped ocean: {skipped}")
         print(f'World: {world}')
 
 
@@ -271,6 +296,9 @@ def main():
     p.add_argument('--threads', type=int, default=min(8, max(1, (os.cpu_count() or 2) // 2)))
     p.add_argument('--danish-buildings', type=Path, help='Optional prepared supplement covering all padded cells')
     p.add_argument('--osm-file', type=Path, help='Optional OSM JSON covering all padded cells; otherwise use Arnis download')
+    p.add_argument('--land-mask', type=Path, help='Prepared ocean_mask.py file; skip open-sea cells as void')
+    p.add_argument('--coast-buffer-m', type=float, default=1000, help='Retain a coastal sea strip (default 1000 metres, plus cell padding)')
+    p.add_argument('--keep-bbox', action='append', default=[], help='Always generate this south,west,north,east area, e.g. a bridge; repeatable')
     p.add_argument('--caves', action='store_true')
     p.add_argument('--signage', choices=['none', 'basic', 'full'], default='full')
     p.set_defaults(function=plan)
