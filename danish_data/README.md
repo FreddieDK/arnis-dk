@@ -337,3 +337,35 @@ bygning har hver sin dør og fulde adresse. Alle 1.614 intakte dørpar havde luk
 sidefelter. De 22 Python-tests og 14 danske Rust-tests bestod, samt release-build
 og GUI-check. Det er kontrol af den gemte verden; TK-punkterne angiver fortsat
 facader og garanterer ikke den præcise placering af en virkelig dør.
+
+### Træer på byens belægninger
+
+Automatisk placerede træer må ikke bruge belægning som rodsted, blot fordi
+satellitdata viser en trækrone over stedet. `ground_generation.rs` bruger nu
+kun den eksisterende kontrol for naturligt underlag til de ekstra træer;
+undtagelsen for glat sten, stenmursten og revnede stenmursten er fjernet.
+
+`scattered_tree_ground` i `element_processing/tree.rs` kontrollerer både den
+ønskede position og den endelige stammeposition efter træpakkens flytning til
+et fast gitter. En forseglet vej-/pladskolonne afvises altid. Eksisterende
+underlag skal være græs, jord, grov jord, podzol, mos, mudder, dyrket jord,
+sand, sneblok eller mycelium. Dermed afvises også fliser, beton, grus og stier.
+Sand og øvrige naturlige underlag bevares af hensyn til strand- og skovhabitater.
+Før terrænet er udfyldt tillades en tom kolonne, undtagen når land cover angiver
+bebyggelse; et allerede tegnet græsbed kan stadig bruges i et bebygget område.
+
+OSM's eksplicitte `natural=tree` og `natural=tree_row` bevares, også på
+belægning, da disse kan være reelle gadetræer i plantehuller. Træer inde i
+bygninger, under broer og på vand afvises som hidtil. Skov-/parkernes
+tæthedsindstillinger, terrænhøjder og Mapterhorn-data er uændrede. Ændringen
+gælder nygenererede kort og kræver ingen ny API-nøgle eller serverplugin.
+
+Kontrol med identisk Slagelse-bbox, OSM-fil og dansk supplement: løvblokke
+faldt fra 471.075 til 445.348 og log-blokke fra 75.865 til 72.067. Disse er
+bloktal, ikke antal træer (bygninger kan også indeholde træstammer). Konkrete
+stammer på stenmursten ved bl.a. X=501, Y=-50, Z=195 er fjernet i den nye
+verdensfil. Alle 1.298 adresseskilte er identiske, og antal dørblokke er uændret.
+53 trætests bestod (1 ignoreret), samt release-build og GUI-check. Testene
+omfatter spredte/canopy-træer på forskellige belægninger, naturlige underlag
+og bevarelse af et eksplicit kortlagt gadetræ. Ingen visuel Minecraft-kontrol
+er udført af hele området.

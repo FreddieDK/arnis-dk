@@ -435,6 +435,35 @@ fn near_beach(editor: &WorldEditor, x: i32, z: i32) -> bool {
         .any(|&(dx, dz)| editor.cover_class(x + dx, z + dz) == crate::land_cover::LC_BEACH)
 }
 
+/// A measured crown is not evidence of a trunk rooted in a paved surface.
+/// Before the ground pass, an unwritten column may still become natural soil;
+/// mapped built-up cover is the exception unless OSM has already painted soil.
+fn scattered_tree_ground(editor: &WorldEditor, x: i32, z: i32) -> bool {
+    if editor.surface_is_sealed(x, z) {
+        return false;
+    }
+    if !editor.block_exists_absolute(x, editor.get_absolute_y(x, 0, z), z) {
+        return editor.cover_class(x, z) != crate::land_cover::LC_BUILT_UP;
+    }
+    editor.check_for_block(
+        x,
+        0,
+        z,
+        Some(&[
+            GRASS_BLOCK,
+            DIRT,
+            COARSE_DIRT,
+            PODZOL,
+            MOSS_BLOCK,
+            MUD,
+            FARMLAND,
+            SAND,
+            SNOW_BLOCK,
+            MYCELIUM,
+        ]),
+    )
+}
+
 /// Map a chosen `TreeType` to a habitat hint that steers region community selection.
 fn habitat_for_tree_type(t: TreeType) -> crate::trees::region::Habitat {
     use crate::trees::region::Habitat;
@@ -611,7 +640,7 @@ impl Tree {
         // Roads, pitches and other paved areas own their columns. The block check
         // below cannot see this: a surface=dirt track is dirt like any field, and a
         // pitch drawn after the park around it has not been painted yet.
-        if !allow_on_paved && editor.surface_is_sealed(x, z) {
+        if !allow_on_paved && !scattered_tree_ground(editor, x, z) {
             return;
         }
 
@@ -736,7 +765,7 @@ impl Tree {
                     || building_footprints.is_some_and(|f| f.contains(sx, sz))
                     || editor.check_for_block(sx, 0, sz, Some(road_water))
                     || bridge_surface.is_some_and(|b| b.contains(sx, sz))
-                    || (!allow_on_paved && editor.surface_is_sealed(sx, sz))
+                    || (!allow_on_paved && !scattered_tree_ground(editor, sx, sz))
                 {
                     return;
                 }
@@ -1792,6 +1821,55 @@ mod sealed_surface_tests {
             !column_is_empty(&editor, 16, 16),
             "natural=tree is mapped on purpose and keeps its paving exception"
         );
+    }
+
+    #[test]
+    fn speculative_trees_require_soil_but_mapped_street_trees_keep_their_position() {
+        let bounds = XZBBox::rect_from_min_max(0, 0, 31, 31).unwrap();
+        let ll = LLBBox::new(46.0, 7.7, 46.01, 7.71).unwrap();
+        for surface in [
+            STONE_BRICKS,
+            CRACKED_STONE_BRICKS,
+            STONE_BRICK_SLAB,
+            POLISHED_ANDESITE,
+            SMOOTH_STONE,
+            GRAVEL,
+            DIRT_PATH,
+            GRAY_CONCRETE,
+            WATER,
+        ] {
+            for canopy in [false, true] {
+                let mut editor = WorldEditor::new(std::env::temp_dir(), &bounds, ll);
+                editor.set_block_absolute(surface, 16, 0, 16, None, None);
+                assert!(!scattered_tree_ground(&editor, 16, 16));
+                if canopy {
+                    Tree::create_from_canopy(&mut editor, (16, 1, 16), None, None);
+                } else {
+                    Tree::create(&mut editor, (16, 1, 16), None, None);
+                }
+                assert!(!(1..40).any(|y| editor.block_exists_absolute(16, y, 16)));
+            }
+        }
+        for surface in [GRASS_BLOCK, DIRT, PODZOL, MOSS_BLOCK, MUD, SAND] {
+            let mut editor = WorldEditor::new(std::env::temp_dir(), &bounds, ll);
+            editor.set_block_absolute(surface, 16, 0, 16, None, None);
+            assert!(scattered_tree_ground(&editor, 16, 16));
+            Tree::create_of_type(
+                &mut editor,
+                (16, 1, 16),
+                TreeType::Oak,
+                None,
+                None,
+                false,
+                false,
+            );
+            assert!(editor.block_exists_absolute(16, 1, 16));
+        }
+        let mut editor = WorldEditor::new(std::env::temp_dir(), &bounds, ll);
+        editor.set_block_absolute(STONE_BRICKS, 16, 0, 16, None, None);
+        let mapped = crate::trees::mapped::MappedTree::from_tags(&Default::default(), 1);
+        Tree::create_mapped(&mut editor, (16, 1, 16), &mapped, None, None);
+        assert!(editor.block_exists_absolute(16, 1, 16));
     }
 }
 

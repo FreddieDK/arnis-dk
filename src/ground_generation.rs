@@ -1029,16 +1029,10 @@ pub fn generate_ground_region(
                                     ]),
                                     None,
                                 );
-                            // Trees can also grow through stone surfaces (urban tree cover)
-                            let ground_allows_trees = ground_is_natural
-                                || (!sealed
-                                    && editor.check_for_block_absolute(
-                                        x,
-                                        ground_y,
-                                        z,
-                                        Some(&[SMOOTH_STONE, STONE_BRICKS, CRACKED_STONE_BRICKS]),
-                                        None,
-                                    ));
+                            // Satellite crowns can overhang pavement. Speculative trunks
+                            // need natural soil; only explicitly mapped trees may stand
+                            // on paving (handled during OSM processing).
+                            let ground_allows_trees = ground_is_natural;
                             // Where the canopy map reaches, it decides which columns get
                             // trees on any class, and land cover keeps the surface and the
                             // undergrowth. Its roll uses its own hash, so turning the option
