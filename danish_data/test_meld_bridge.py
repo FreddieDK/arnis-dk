@@ -59,7 +59,7 @@ class BridgeTests(unittest.TestCase):
             bridge.atomic_json(job / 'plan.json', doc)
             args = argparse.Namespace(job=job, limit=1, timeout=60, credentials_file=None)
             with patch.object(bridge, 'verify_inputs'), patch.object(bridge, 'probe'), \
-                    patch.object(bridge, 'validate_result'), \
+                    patch.object(bridge, 'validate_result'), patch.object(bridge, 'world_coverage'), \
                     patch.object(bridge.subprocess, 'run') as process:
                 process.return_value.returncode = 0
                 bridge.run(args)
@@ -68,7 +68,7 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual([c['status'] for c in bridge.read_json(job/'plan.json')['cells']],
                              ['complete', 'complete', 'pending', 'skipped_ocean'])
             with patch.object(bridge, 'verify_inputs'), patch.object(bridge, 'probe'), \
-                    patch.object(bridge, 'validate_result'), \
+                    patch.object(bridge, 'validate_result'), patch.object(bridge, 'world_coverage'), \
                     patch.object(bridge.subprocess, 'run') as process:
                 process.return_value.returncode = 2
                 with self.assertRaisesRegex(ValueError, 'exit code 2'):
@@ -85,6 +85,30 @@ class BridgeTests(unittest.TestCase):
             bridge.validate_result(world, {'bbox': [55, 11, 55.001, 11.001]})
             with self.assertRaisesRegex(ValueError, 'does not cover'):
                 bridge.validate_result(world, {'bbox': [56, 11, 56.001, 11.001]})
+
+    def test_large_resume_reads_world_manifest_once_and_still_detects_missing_area(self):
+        with tempfile.TemporaryDirectory() as directory:
+            job = Path(directory)
+            world = job/'worlds'/'Test'
+            world.mkdir(parents=True)
+            (world/'level.dat').write_bytes(b'test')
+            areas = [{'min_lat':55, 'max_lat':55.001,
+                      'min_lon':11+i*.001, 'max_lon':11+(i+1)*.001} for i in range(2000)]
+            bridge.atomic_json(world/'arnis_one_world.json', {'areas':areas})
+            cells = [{'status':'complete','bbox':[55,a['min_lon'],55.001,a['max_lon']]} for a in areas]
+            doc = {'arnis':{'path':'unused'},'world_name':'Test','cells':cells}
+            bridge.atomic_json(job/'plan.json',doc)
+            args = argparse.Namespace(job=job,limit=None,timeout=60,credentials_file=None)
+            with patch.object(bridge,'verify_inputs'), patch.object(bridge,'probe'), \
+                    patch.object(bridge,'read_json',wraps=bridge.read_json) as read:
+                bridge.run(args)
+                manifest_reads = [c for c in read.call_args_list if Path(c.args[0]).name=='arnis_one_world.json']
+                self.assertEqual(len(manifest_reads),1)
+            cells[-1]['bbox']=[56,11,56.001,11.001]
+            bridge.atomic_json(job/'plan.json',doc)
+            with patch.object(bridge,'verify_inputs'), patch.object(bridge,'probe'):
+                with self.assertRaisesRegex(ValueError,'does not cover'):
+                    bridge.run(args)
 
 
 if __name__ == '__main__':

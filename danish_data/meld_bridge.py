@@ -217,15 +217,25 @@ def command(document, cell, job, supplement):
     return cmd
 
 
-def validate_result(world, cell):
+def world_coverage(world):
+    from shapely.geometry import box
+    from shapely.strtree import STRtree
     if not (world / 'level.dat').is_file():
         raise ValueError('Arnis did not produce level.dat')
     manifest = read_json(world / 'arnis_one_world.json')
     if not manifest.get('areas'):
         raise ValueError('Arnis did not record a completed area')
+    return STRtree([box(a['min_lon'], a['min_lat'], a['max_lon'], a['max_lat'])
+                    for a in manifest['areas']])
+
+
+def validate_result(world, cell, coverage=None):
+    from shapely.geometry import box
+    if coverage is None:
+        coverage = world_coverage(world)
     s, w, n, e = cell['bbox']
-    if not any(contains([a['min_lat'], a['min_lon'], a['max_lat'], a['max_lon']],
-                        [s + 1e-8, w + 1e-8, n - 1e-8, e - 1e-8]) for a in manifest['areas']):
+    requested = box(w + 1e-8, s + 1e-8, e - 1e-8, n - 1e-8)
+    if not len(coverage.query(requested, predicate='covered_by')):
         raise ValueError('World manifest does not cover the generated cell')
 
 
@@ -244,9 +254,10 @@ def run(args):
         cells = [c for c in document['cells'] if c['status'] not in ('complete', 'skipped_ocean')]
         world = job / 'worlds' / document['world_name']
         if any(c['status'] == 'complete' for c in document['cells']):
+            coverage = world_coverage(world)
             for cell in document['cells']:
                 if cell['status'] == 'complete':
-                    validate_result(world, cell)
+                    validate_result(world, cell, coverage)
         if not cells:
             print('No pending land/coastal cells; nothing generated (open sea stays void).')
             return
