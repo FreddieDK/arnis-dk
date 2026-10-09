@@ -164,7 +164,9 @@ vejnavne og postnumre gættes ikke. Det er adgangsadressen uden lejlighed,
 etage eller beboeroplysninger.
 
 Ved `--signage=full` bruger `generate_building_signage` den komplette tekst
-på et almindeligt `spruce_wall_sign` med en normal sign-blokentitet. Skiltet
+på et almindeligt `spruce_wall_sign` med en normal sign-blokentitet og lysende
+hvid tekst (`front_text.color=white`, `has_glowing_text=1`). Det bruger vanilla
+glow-ink-effekten uden plugin. Andre tekstskiltes standard ændres ikke. Skiltet
 placeres ved siden af døren på en eksisterende massiv væg, aldrig i selve
 åbningen. Det erstatter husnummerets kortbillede, når placeringen lykkes;
 andre Arnis-skilte bruger fortsat upstreams billedskilte. Basic/none får ikke
@@ -177,16 +179,24 @@ Teksten afkortes ikke. Danske bogstaver bevares som Unicode i NBT-teksten.
 
 Fejlen ved Herrestræde 1C kunne reproduceres i regionfilen: døren stod i en
 skrå rastervæg, hvor en side kun havde diagonal kontakt til døren. Efter
-alle facade- og dekorationspas lukker `finish_dar_doorway` nu de to
-karmkolonner og overliggeren ved DAR-indgange med bygningens vægmateriale.
-Selve døren og passagen bevares; andre indgange får ikke denne behandling.
-Regressionstesten bruger den rapporterede bygnings skrå omrids og kontrollerer
-begge karmstolper samt fri passage foran/bagved døren.
+alle facade- og dekorationspas udfylder `finish_dar_doorway` kun luftceller
+umiddelbart ved siden af DAR-dørens to blokke. Materialet tages fra den
+tilstødende væg i samme højde, så fx stensoklen fortsætter ind til døren.
+Bygningens vægmateriale bruges kun som fallback. Eksisterende facadeblokke
+og overligger bevares; en overligger tilføjes kun, hvis den mangler.
+Der tilføjes ikke længere hele tre blokke høje træstolper. Selve døren og
+passagen bevares; andre indgange får ikke denne behandling. Regressionstesten
+bruger den rapporterede bygnings skrå omrids og kontrollerer lukkede sider,
+bevaret facade/overligger samt fri passage foran/bagved døren.
 
 
-Verificeret på samme Slagelse-område: 351 almindelige adresseskilte i den
+Verificeret på samme Slagelse-område: 345 almindelige adresseskilte i den
 færdige verdensfil. Skiltet ved Herrestræde 1C indeholder præcis
 "Herrestræde 1C," og "4200 Slagelse" på hver sin linje. Den tidligere åbne
 karmcelle (312,-49,482) er udfyldt, begge dørhalvdele er bevaret, og felterne
-foran og bagved døren er fri. 296 element-/bygningstests bestod (2 ignoreret),
-20 Python-tests bestod; release-build og GUI-check bestod.
+foran og bagved døren er fri. Efter den diskrete karmrettelse er den gamle
+sokkel, facade og overligger bevaret, og kun to sideblokke tilføjes ved 1C:
+brosten nederst og granstamme ovenover. Alle 345 adresseskilte er kontrolleret
+for lysende hvid tekst i NBT. 296 element-/bygningstests bestod (2 ignoreret)
+og 70 world-editor-tests bestod; release-build og GUI-check bestod.
+Kontrollen er foretaget i verdensfilerne, ikke visuelt i Minecraft.

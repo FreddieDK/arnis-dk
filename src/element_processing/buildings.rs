@@ -8286,18 +8286,43 @@ fn finish_dar_doorway(editor: &mut WorldEditor, plan: &EntrancePlan, config: &Bu
     let base = config.start_y_offset + config.abs_terrain_offset + 1;
     for side in [-1, 1] {
         let (x, z) = (plan.x + side * tx, plan.z + side * tz);
-        for y in base..=base + 2 {
-            // Do not replace another intentional entrance leaf.
-            if editor
-                .get_block_absolute(x, y, z)
-                .is_some_and(|b| b.name().ends_with("_door"))
-            {
+        for y in base..=base + 1 {
+            // Keep the original facade, including its plinth and decoration.
+            if editor.get_block_absolute(x, y, z).is_some_and(|b| b != AIR) {
                 continue;
             }
-            editor.set_block_absolute(config.wall_block, x, y, z, None, Some(&[]));
+            // Follow the material of the adjoining wall at this height instead
+            // of adding a uniform wooden post through the stone plinth.
+            let material = [(nx, nz), (-nx, -nz), (side * tx, side * tz)]
+                .into_iter()
+                .filter_map(|(dx, dz)| editor.get_block_absolute(x + dx, y, z + dz))
+                .find(|b| {
+                    let name = b.name();
+                    *b != AIR
+                        && !name.contains("glass")
+                        && !name.contains("sign")
+                        && ![
+                            "_door",
+                            "_trapdoor",
+                            "_stairs",
+                            "_slab",
+                            "_wall",
+                            "_fence",
+                            "_pane",
+                        ]
+                        .iter()
+                        .any(|suffix| name.ends_with(suffix))
+                })
+                .unwrap_or(config.wall_block);
+            editor.set_block_absolute(material, x, y, z, None, Some(&[]));
         }
     }
-    editor.set_block_absolute(config.wall_block, plan.x, base + 2, plan.z, None, Some(&[]));
+    if editor
+        .get_block_absolute(plan.x, base + 2, plan.z)
+        .is_none_or(|b| b == AIR)
+    {
+        editor.set_block_absolute(config.wall_block, plan.x, base + 2, plan.z, None, Some(&[]));
+    }
 }
 
 /// Sign anchor: the entrance column, else the middle of the front wall.
@@ -13628,6 +13653,25 @@ mod facade_integration_tests {
             .collect();
         let mut editor = test_editor(&xz);
         run_building(&mut editor, &way, &road, &footprints);
+        let mut original_way = way.clone();
+        for node in &mut original_way.nodes {
+            node.tags.remove("source:entrance");
+        }
+        let mut original = test_editor(&xz);
+        run_building(&mut original, &original_way, &road, &footprints);
+        for z in [23, 24, 25] {
+            for y in 1..=3 {
+                if let Some(block) = original.get_block_absolute(44, y, z) {
+                    if block != AIR {
+                        assert_eq!(
+                            editor.get_block_absolute(44, y, z),
+                            Some(block),
+                            "existing facade and lintel must survive at {y},{z}"
+                        );
+                    }
+                }
+            }
+        }
         for y in 1..=2 {
             assert!(editor.check_for_block(44, y, 24, Some(DOOR_BLOCKS)));
             for z in [23, 25] {

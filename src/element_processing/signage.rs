@@ -1067,7 +1067,7 @@ fn place_address_sign(editor: &mut WorldEditor, anchor: &FacadeAnchor, text: &st
         for (p, lines) in pages.iter().enumerate() {
             let refs: Vec<_> = lines.iter().map(String::as_str).collect();
             let y = anchor.number_y + (pages.len() - 1 - p) as i32;
-            if !editor.place_wall_sign(x, y, z, facing, &refs) {
+            if !editor.place_wall_sign_with_glow(x, y, z, facing, &refs, true) {
                 return false;
             }
         }

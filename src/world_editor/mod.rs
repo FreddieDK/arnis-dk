@@ -1705,6 +1705,19 @@ impl<'a> WorldEditor<'a> {
         facing: i8,
         lines: &[&str],
     ) -> bool {
+        self.place_wall_sign_with_glow(bx, abs_y, bz, facing, lines, false)
+    }
+
+    /// White-text wall sign with optional vanilla glow-ink rendering. Java only.
+    pub fn place_wall_sign_with_glow(
+        &mut self,
+        bx: i32,
+        abs_y: i32,
+        bz: i32,
+        facing: i8,
+        lines: &[&str],
+        glow: bool,
+    ) -> bool {
         if self.format != WorldFormat::JavaAnvil || !(2..=5).contains(&facing) {
             return false;
         }
@@ -1721,7 +1734,7 @@ impl<'a> WorldEditor<'a> {
             5 => "east",
             _ => "north",
         };
-        let be = Self::sign_block_entity(fx, fy, fz, lines, "white", false);
+        let be = Self::sign_block_entity(fx, fy, fz, lines, "white", glow);
         self.insert_block_entity(fx, fz, be);
         self.set_block_with_properties_absolute(
             BlockWithProperties::new(
