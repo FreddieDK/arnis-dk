@@ -117,7 +117,7 @@ impl TreeDensityAreas {
 
 /// Independent of shape/species RNG, identical across passes and tile boundaries.
 pub fn keep_urban_tree(x: i32, z: i32) -> bool {
-    crate::land_cover::coord_hash(x ^ 0x5542, z ^ 0x5452) % 100 < 20
+    crate::land_cover::coord_hash(x ^ 0x5542, z ^ 0x5452) % 100 < 15
 }
 
 #[cfg(test)]
@@ -180,7 +180,7 @@ mod tests {
                 a
             })
             .count();
-        assert!((7000..9000).contains(&count), "{count}");
+        assert!((5000..7000).contains(&count), "{count}");
     }
 
     #[test]

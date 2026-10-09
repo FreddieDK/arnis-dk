@@ -398,10 +398,10 @@ på plæner ved byen, selv når OSM mangler et byområde. Uden disse tegn på by
 ændres tæthedsvalget ikke; land-cover-trædække alene udløser ingen udtynding.
 Manglende skovkortlægning kan derfor stadig give udtynding langs bebyggelse.
 
-I byområdet beholdes 20 procent af de mulige stammepositioner med en fast,
+I byområdet beholdes 15 procent af de mulige stammepositioner med en fast,
 koordinatbaseret hash. Det er en ekstra kraftig udtynding af både spredte,
 satellitbaserede og kortlagte træer. Det betyder ikke nødvendigvis præcis
-80 procent færre træer eller løvblokke i et bestemt kort. Skovens eksisterende
+85 procent færre træer eller løvblokke i et bestemt kort. Skovens eksisterende
 arts-, størrelses- og tæthedsvalg ændres ikke. Kravet om naturligt rodsted og
 forbuddet mod træer på belægning gælder fortsat alle træer.
 
@@ -424,7 +424,7 @@ kontrollerede testområder, ikke med en stor skov i denne Slagelse-verden.
 release-build og GUI-check. Kontrollen af verdenen er automatisk, ikke visuel.
 
 
-Efter brugerens visuelle vurdering er indstillingen skærpet til 20 procent
+Efter den første visuelle vurdering blev indstillingen skærpet til 20 procent
 bevarede kandidatpositioner og supplerende naboprøver ved 64 meter. Større
 græsarealer mellem huse bliver dermed også genkendt som by, selv hvis de
 ikke er kortlagt som residential. De oprindelige 24 meters prøver beholdes.
@@ -439,3 +439,14 @@ intakte dørpar er bevaret uden sidehuller. Fire målrettede tæthedstests,
 release-build og GUI-check bestod. Verdensfilerne er kontrolleret automatisk;
 der er ikke udført visuel kontrol i Minecraft. Eksisterende verdener ændres
 ikke: testen ligger i en ny `slagelse-sparse-city-3.3-dk`-verden.
+
+
+En efterfølgende finjustering bevarer 15 procent af byens kandidatpositioner
+mod tidligere 20 procent. Det er 25 procent færre accepterede positioner
+statistisk; det er ikke nødvendigvis samme procentvise ændring i træantal
+eller løvblokke. Områdegenkendelse, skovfritagelse og underlagskrav er uændrede.
+Samme Slagelse-input gav 47,858 → 39,438
+løvblokke. Alle 1305 tidligere adresseskilte og
+1617 intakte dørpar er bevaret; ingen sidehuller blev fundet.
+Fire tæthedstests og release-build bestod. Kontrollen er automatisk i
+verdensfilerne; ny testverden: `slagelse-city15-3.3-dk/Arnis World 1`.
