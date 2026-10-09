@@ -1,6 +1,6 @@
 # Arnis DK
 
-Dette projekt bygger på **officiel Arnis v3.2.0** og supplerer dens bygninger med
+Dette projekt bygger på **officiel Arnis v3.3.0** og supplerer dens bygninger med
 danske registerdata. Terræn og kyster følger upstream. Mapterhorn er den normale
 terrænkilde i Danmark; Arnis beholder sin AWS-reserve ved fejl. Den tidligere
 direkte DHM/WCS-integration, DHM-token og lokale kystrettelser er fjernet.
@@ -115,7 +115,7 @@ cargo test --locked --no-default-features
 .\.local\venv\Scripts\python.exe -m unittest discover -s danish_data -p "test_*.py"
 ```
 
-- [Arnis v3.2.0](https://github.com/louis-e/arnis/releases/tag/v3.2.0)
+- [Arnis v3.3.0](https://github.com/louis-e/arnis/releases/tag/v3.3.0)
 - [BBR's materialer og anvendelseskoder](https://bbr.dk/kodelister)
 - [DAR's statuskoder](https://danmarksadresser.dk/adressedata/kodelister/livscyklus)
 - [Datafordelerens grunddatamodel](https://grunddatamodel.datafordeler.dk/)

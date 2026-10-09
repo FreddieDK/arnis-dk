@@ -73,3 +73,22 @@ bygninger; dette tal omfatter de 46, hvor egenskaber kunne suppleres.
 Dette bekræfter hentning, import og gemning af verdenen. Det er ikke en visuel
 kontrol i Minecraft af hver bygning, og det dokumenterer ikke præcise dørplaceringer.
 Rådata, nøgler, logs og testverden er lokale og indgår ikke i Git.
+
+
+### Gentaget med Arnis 3.3.0
+
+Den 9. oktober 2026 blev samme bbox og gemte OSM-udtræk genereret med både
+upstreams officielle Windows-udgave v3.3.0 og Arnis DK bygget på samme tag
+(`c96872e0fa21573402d1b731ea87f796e8caa1d2`). Begge brugte Mapterhorn,
+skala 1 og lokal projektion, med `--map-item=false --signage=none`.
+DK-kørslen fik desuden det samme danske registerudtræk som ovenfor.
+
+Begge verdener blev gemt korrekt med samme geografiske grænser og størrelse
+(316 x 334 blokke). DK-resultatet var fortsat 1 tilføjet og 46 supplerede
+bygninger samt 145 udeladte overlappende omrids. Dette er en kontrol af import
+og generering, ikke en visuel kvalitetsvurdering i Minecraft.
+
+Tilpasningen til 3.3.0 bruger upstreams `ProjectionSpec::from_args` ved import
+og bevarer oprydning af One World-kørsler ved importfejl. Terrænlogikken er
+uændret fra upstream. Kontrol: 1.480 Rust-tests bestod (18 ignoreret), og alle
+16 Python-tests bestod.

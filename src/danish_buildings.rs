@@ -219,8 +219,12 @@ pub fn apply(
         );
     }
     let raw: osm_parser::OsmData = serde_json::from_value(value).map_err(|e| e.to_string())?;
-    let (incoming, _, _, _) =
-        osm_parser::parse_osm_data(raw, bbox, args.scale, args.debug, args.projection);
+    let (incoming, _, _, _) = osm_parser::parse_osm_data(
+        raw,
+        bbox,
+        args.debug,
+        &crate::projection::ProjectionSpec::from_args(args),
+    );
     let identities: HashSet<_> = elements.iter().map(|e| (e.kind(), e.id())).collect();
     if incoming
         .iter()
