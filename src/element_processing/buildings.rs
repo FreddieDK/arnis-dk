@@ -4071,128 +4071,76 @@ fn report_wall_segments(
     );
 }
 
-/// Generates special doors for garages (double door) and sheds (single door)
-fn generate_special_doors(
-    editor: &mut WorldEditor,
+/// Plan legacy garage/shed positions through the shared oriented-door renderer.
+fn plan_special_door(
     element: &ProcessedWay,
     config: &BuildingConfig,
     wall_outline: &[(i32, i32)],
     building_passages: &CoordinateBitmap,
-) {
-    if wall_outline.is_empty() {
-        return;
+) -> Option<EntrancePlan> {
+    if wall_outline.is_empty() || element.nodes.len() < 2 {
+        return None;
     }
-
-    // Find the front-facing wall segment (longest or first significant segment)
-    // We'll use the first wall segment from the element nodes
     let nodes = &element.nodes;
-    if nodes.len() < 2 {
-        return;
-    }
-
-    let mut rng = element_rng(element.id);
-    let door_y = config.start_y_offset + config.abs_terrain_offset + 1;
-
+    let outward = outward_side(nodes);
+    let make_plan = |x, z, a: &ProcessedNode, b: &ProcessedNode, double, style| {
+        let normal = compute_outward_normal(a.x, a.z, b.x, b.z, outward);
+        let tangent = if normal.0 == 0 { (1, 0) } else { (0, 1) };
+        EntrancePlan {
+            x,
+            z,
+            normal,
+            tangent,
+            double,
+            style,
+            canopy: false,
+            lantern: false,
+        }
+    };
     if config.has_garage_door {
-        // Place double spruce door on front face
-        // Find a suitable wall segment (first one with enough length)
-        for i in 0..nodes.len().saturating_sub(1) {
-            let (x1, z1) = (nodes[i].x, nodes[i].z);
-            let (x2, z2) = (nodes[i + 1].x, nodes[i + 1].z);
-
-            let dx = (x2 - x1).abs();
-            let dz = (z2 - z1).abs();
-            let segment_len = dx.max(dz);
-
-            // Need at least 2 blocks for double door
-            if segment_len >= 2 {
-                // Place doors in the middle of this segment
-                let mid_x = (x1 + x2) / 2;
-                let mid_z = (z1 + z2) / 2;
-
-                // Determine door offset based on wall orientation
-                let (door1_x, door1_z, door2_x, door2_z) = if dx > dz {
-                    // Wall runs along X axis
-                    (mid_x, mid_z, mid_x + 1, mid_z)
-                } else {
-                    // Wall runs along Z axis
-                    (mid_x, mid_z, mid_x, mid_z + 1)
-                };
-
-                // Skip placing doors inside a building passage, and on a
-                // photographed wall, which carries the door the photograph
-                // shows and not a procedural one.
-                if building_passages.contains(door1_x, door1_z)
-                    || building_passages.contains(door2_x, door2_z)
-                    || config.is_photo_column(door1_x, door1_z)
-                    || config.is_photo_column(door2_x, door2_z)
-                {
-                    continue;
-                }
-
-                // Place the double door (lower and upper parts)
-                // Use empty blacklist to overwrite existing wall blocks
-                editor.set_block_absolute(
-                    SPRUCE_DOOR_LOWER,
-                    door1_x,
-                    door_y,
-                    door1_z,
-                    None,
-                    Some(&[]),
-                );
-                editor.set_block_absolute(
-                    SPRUCE_DOOR_UPPER,
-                    door1_x,
-                    door_y + 1,
-                    door1_z,
-                    None,
-                    Some(&[]),
-                );
-                editor.set_block_absolute(
-                    SPRUCE_DOOR_LOWER,
-                    door2_x,
-                    door_y,
-                    door2_z,
-                    None,
-                    Some(&[]),
-                );
-                editor.set_block_absolute(
-                    SPRUCE_DOOR_UPPER,
-                    door2_x,
-                    door_y + 1,
-                    door2_z,
-                    None,
-                    Some(&[]),
-                );
-
-                break; // Only place one set of garage doors
+        for pair in nodes.windows(2) {
+            let (a, b) = (&pair[0], &pair[1]);
+            if (b.x - a.x).abs().max((b.z - a.z).abs()) < 2 {
+                continue;
             }
+            let plan = make_plan(
+                (a.x + b.x) / 2,
+                (a.z + b.z) / 2,
+                a,
+                b,
+                true,
+                DoorStyle::Spruce,
+            );
+            if (0..=1).any(|t| {
+                let (x, z) = (plan.x + plan.tangent.0 * t, plan.z + plan.tangent.1 * t);
+                building_passages.contains(x, z) || config.is_photo_column(x, z)
+            }) {
+                continue;
+            }
+            return Some(plan);
         }
     } else if config.has_single_door {
-        // Place a single oak door somewhere on the wall
-        // Pick a random position from the wall outline
-        if !wall_outline.is_empty() {
-            let door_idx = rng.random_range(0..wall_outline.len());
-            let (door_x, door_z) = wall_outline[door_idx];
-
-            // Skip placing a door inside a building passage or on a
-            // photographed wall, which carries its own door.
-            if !building_passages.contains(door_x, door_z)
-                && !config.is_photo_column(door_x, door_z)
-            {
-                // Place single oak door (empty blacklist to overwrite wall blocks)
-                editor.set_block_absolute(OAK_DOOR, door_x, door_y, door_z, None, Some(&[]));
-                editor.set_block_absolute(
-                    OAK_DOOR_UPPER,
-                    door_x,
-                    door_y + 1,
-                    door_z,
-                    None,
-                    Some(&[]),
-                );
-            }
+        let mut rng = element_rng(element.id);
+        let (x, z) = wall_outline[rng.random_range(0..wall_outline.len())];
+        if building_passages.contains(x, z) || config.is_photo_column(x, z) {
+            return None;
         }
+        // The selected raster cell can be a corner; prefer the longer wall there.
+        let pair = nodes
+            .windows(2)
+            .filter(|pair| {
+                bresenham_line(pair[0].x, 0, pair[0].z, pair[1].x, 0, pair[1].z)
+                    .iter()
+                    .any(|&(bx, _, bz)| (bx, bz) == (x, z))
+            })
+            .max_by_key(|pair| {
+                (pair[1].x - pair[0].x)
+                    .abs()
+                    .max((pair[1].z - pair[0].z).abs())
+            })?;
+        return Some(make_plan(x, z, &pair[0], &pair[1], false, DoorStyle::Oak));
     }
+    None
 }
 
 /// Determines which block to place at a specific wall position (wall, window, or accent)
@@ -8048,9 +7996,17 @@ pub fn generate_buildings(
         }
     }
 
-    // Generate special doors (garage doors, shed doors)
-    if config.has_garage_door || config.has_single_door {
-        generate_special_doors(editor, element, &config, &wall_outline, effective_passages);
+    // Keep garage/shed doors in the same plans so decoration, signage and
+    // final gap repair see them, and both halves get an explicit direction.
+    if entrance_plans.is_empty() {
+        if let Some(plan) = plan_special_door(element, &config, &wall_outline, effective_passages) {
+            for t in 0..=i32::from(plan.double) {
+                let (x, z) = (plan.x + plan.tangent.0 * t, plan.z + plan.tangent.1 * t);
+                facade.mark_door_column(x, z);
+                facade.mark_door_column(x + plan.normal.0, z + plan.normal.1);
+            }
+            entrance_plans.push(plan);
+        }
     }
 
     // Entrance doors overwrite the freshly built wall columns.
@@ -8260,13 +8216,12 @@ pub fn generate_buildings(
     // A diagonal raster wall may only touch a door at a corner. A cardinal
     // doorway needs full jambs on both sides, after decoration has finished.
     for plan in &entrance_plans {
-        if element.nodes.iter().any(|n| {
-            n.x == plan.x
-                && n.z == plan.z
-                && n.tags.get("source:entrance").is_some_and(|s| s == "DAR")
-        }) {
-            finish_dar_doorway(editor, plan, &config);
-        }
+        finish_doorway(
+            editor,
+            plan,
+            config.start_y_offset + config.abs_terrain_offset + 1,
+            config.wall_block,
+        );
     }
 
     // After every wall and decoration pass, so the seam audit sees the world
@@ -8276,52 +8231,65 @@ pub fn generate_buildings(
     facade_anchor(element, &facade, &config, &entrance_plans)
 }
 
-/// Close the diagonal gaps beside a DAR doorway without changing other entrances.
-fn finish_dar_doorway(editor: &mut WorldEditor, plan: &EntrancePlan, config: &BuildingConfig) {
-    if plan.double {
-        return;
-    }
+/// Close raster gaps beside every rendered entrance, preserving both door leaves.
+fn finish_doorway(editor: &mut WorldEditor, plan: &EntrancePlan, base: i32, wall_block: Block) {
     let (nx, nz) = plan.normal;
     let (tx, tz) = (-nz, nx);
-    let base = config.start_y_offset + config.abs_terrain_offset + 1;
-    for side in [-1, 1] {
-        let (x, z) = (plan.x + side * tx, plan.z + side * tz);
-        for y in base..=base + 1 {
-            // Keep the original facade, including its plinth and decoration.
-            if editor.get_block_absolute(x, y, z).is_some_and(|b| b != AIR) {
+    let mut leaves = vec![(plan.x, plan.z)];
+    if plan.double {
+        leaves.push((plan.x + plan.tangent.0, plan.z + plan.tangent.1));
+    }
+    for &(door_x, door_z) in &leaves {
+        // Only finish actual doors that survived the decoration passes.
+        if !(base..=base + 1).all(|y| {
+            editor
+                .get_block_absolute(door_x, y, door_z)
+                .is_some_and(|b| b.name().ends_with("_door"))
+        }) {
+            continue;
+        }
+        for side in [-1, 1] {
+            let (x, z) = (door_x + side * tx, door_z + side * tz);
+            if leaves.contains(&(x, z)) {
                 continue;
             }
-            // Follow the material of the adjoining wall at this height instead
-            // of adding a uniform wooden post through the stone plinth.
-            let material = [(nx, nz), (-nx, -nz), (side * tx, side * tz)]
-                .into_iter()
-                .filter_map(|(dx, dz)| editor.get_block_absolute(x + dx, y, z + dz))
-                .find(|b| {
-                    let name = b.name();
-                    *b != AIR
-                        && !name.contains("glass")
-                        && !name.contains("sign")
-                        && ![
-                            "_door",
-                            "_trapdoor",
-                            "_stairs",
-                            "_slab",
-                            "_wall",
-                            "_fence",
-                            "_pane",
-                        ]
-                        .iter()
-                        .any(|suffix| name.ends_with(suffix))
-                })
-                .unwrap_or(config.wall_block);
-            editor.set_block_absolute(material, x, y, z, None, Some(&[]));
+            for y in base..=base + 1 {
+                // Keep the original facade, including its plinth and decoration.
+                if editor.get_block_absolute(x, y, z).is_some_and(|b| b != AIR) {
+                    continue;
+                }
+                // Follow the material of the adjoining wall at this height instead
+                // of adding a uniform wooden post through the stone plinth.
+                let material = [(nx, nz), (-nx, -nz), (side * tx, side * tz)]
+                    .into_iter()
+                    .filter_map(|(dx, dz)| editor.get_block_absolute(x + dx, y, z + dz))
+                    .find(|b| {
+                        let name = b.name();
+                        *b != AIR
+                            && !name.contains("glass")
+                            && !name.contains("sign")
+                            && ![
+                                "_door",
+                                "_trapdoor",
+                                "_stairs",
+                                "_slab",
+                                "_wall",
+                                "_fence",
+                                "_pane",
+                            ]
+                            .iter()
+                            .any(|suffix| name.ends_with(suffix))
+                    })
+                    .unwrap_or(wall_block);
+                editor.set_block_absolute(material, x, y, z, None, Some(&[]));
+            }
         }
-    }
-    if editor
-        .get_block_absolute(plan.x, base + 2, plan.z)
-        .is_none_or(|b| b == AIR)
-    {
-        editor.set_block_absolute(config.wall_block, plan.x, base + 2, plan.z, None, Some(&[]));
+        if editor
+            .get_block_absolute(door_x, base + 2, door_z)
+            .is_none_or(|b| b == AIR)
+        {
+            editor.set_block_absolute(wall_block, door_x, base + 2, door_z, None, Some(&[]));
+        }
     }
 }
 
@@ -12694,6 +12662,51 @@ mod style_tests {
         }
     }
 
+    #[test]
+    fn garage_and_shed_plans_orient_doors_and_respect_passages() {
+        use crate::coordinate_system::cartesian::XZBBox;
+        use crate::element_processing::building_test_support::rect_way;
+        let xz = XZBBox::rect_from_xz_lengths(50.0, 50.0).unwrap();
+        let mut way = rect_way(42, 10, 10, 30, 30, &[]);
+        for rotated in [false, true] {
+            if rotated {
+                way.nodes.rotate_left(1);
+                way.nodes.pop();
+                way.nodes.push(way.nodes[0].clone());
+            }
+            let outline: Vec<_> = way
+                .nodes
+                .windows(2)
+                .flat_map(|p| {
+                    bresenham_line(p[0].x, 0, p[0].z, p[1].x, 0, p[1].z)
+                        .into_iter()
+                        .map(|(x, _, z)| (x, z))
+                })
+                .collect();
+            for garage in [false, true] {
+                let mut config = test_config(6, false, false);
+                config.has_garage_door = garage;
+                config.has_single_door = !garage;
+                let mut passages = CoordinateBitmap::new(&xz);
+                let plan = plan_special_door(&way, &config, &outline, &passages).unwrap();
+                assert_eq!(plan.double, garage);
+                assert_eq!(plan.normal.0.abs() + plan.normal.1.abs(), 1);
+                assert_eq!(
+                    plan.normal.0 * plan.tangent.0 + plan.normal.1 * plan.tangent.1,
+                    0
+                );
+                // A rectangular wall must point away from its center.
+                assert!((plan.x - 20) * plan.normal.0 + (plan.z - 20) * plan.normal.1 > 0);
+                for x in 0..50 {
+                    for z in 0..50 {
+                        passages.set(x, z);
+                    }
+                }
+                assert!(plan_special_door(&way, &config, &outline, &passages).is_none());
+            }
+        }
+    }
+
     /// Every glass tower turns its corner on something solid, whether the glass
     /// is the wall itself or a band running round it.
     #[test]
@@ -13659,25 +13672,18 @@ mod facade_integration_tests {
         }
         let mut original = test_editor(&xz);
         run_building(&mut original, &original_way, &road, &footprints);
-        for z in [23, 24, 25] {
-            for y in 1..=3 {
-                if let Some(block) = original.get_block_absolute(44, y, z) {
-                    if block != AIR {
-                        assert_eq!(
-                            editor.get_block_absolute(44, y, z),
-                            Some(block),
-                            "existing facade and lintel must survive at {y},{z}"
-                        );
-                    }
-                }
-            }
-        }
         for y in 1..=2 {
             assert!(editor.check_for_block(44, y, 24, Some(DOOR_BLOCKS)));
             for z in [23, 25] {
                 let block = editor.get_block_absolute(44, y, z).unwrap();
                 assert_ne!(block, AIR, "open jamb at {y},{z}");
                 assert!(!block.name().ends_with("_door"));
+                assert!(
+                    original
+                        .get_block_absolute(44, y, z)
+                        .is_some_and(|b| b != AIR),
+                    "OSM entrances need the same closed jambs as DAR entrances"
+                );
             }
             assert!(
                 editor
@@ -13691,6 +13697,81 @@ mod facade_integration_tests {
                     .is_none_or(|b| b == AIR),
                 "inside remains passable"
             );
+        }
+    }
+
+    #[test]
+    fn doorway_finish_preserves_facade_double_leaves_and_passage_in_every_direction() {
+        let xz = XZBBox::rect_from_xz_lengths(50.0, 50.0).unwrap();
+        for normal in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            for double in [false, true] {
+                let mut editor = test_editor(&xz);
+                let (nx, nz) = normal;
+                let (tx, tz) = (-nz, nx);
+                let plan = EntrancePlan {
+                    x: 20,
+                    z: 20,
+                    normal,
+                    tangent: (tx, tz),
+                    double,
+                    style: DoorStyle::Oak,
+                    canopy: false,
+                    lantern: false,
+                };
+                let last = i32::from(double);
+                for leaf in 0..=last {
+                    for y in 1..=2 {
+                        editor.set_block_absolute(
+                            OAK_DOOR,
+                            20 + tx * leaf,
+                            y,
+                            20 + tz * leaf,
+                            None,
+                            None,
+                        );
+                    }
+                    editor.set_block_absolute(
+                        STONE_BRICKS,
+                        20 + tx * leaf,
+                        3,
+                        20 + tz * leaf,
+                        None,
+                        None,
+                    );
+                }
+                // One existing jamb must stay intact; the missing one borrows
+                // the stone plinth and timber course from the stepped wall.
+                for (y, material) in [(1, COBBLESTONE), (2, SPRUCE_LOG)] {
+                    editor.set_block_absolute(material, 20 - tx, y, 20 - tz, None, None);
+                    editor.set_block_absolute(
+                        material,
+                        20 + tx * (last + 1) + nx,
+                        y,
+                        20 + tz * (last + 1) + nz,
+                        None,
+                        None,
+                    );
+                }
+                finish_doorway(&mut editor, &plan, 1, OAK_PLANKS);
+                for (y, material) in [(1, COBBLESTONE), (2, SPRUCE_LOG)] {
+                    for side in [-1, last + 1] {
+                        assert_eq!(
+                            editor.get_block_absolute(20 + tx * side, y, 20 + tz * side),
+                            Some(material)
+                        );
+                    }
+                    for leaf in 0..=last {
+                        let (x, z) = (20 + tx * leaf, 20 + tz * leaf);
+                        assert_eq!(editor.get_block_absolute(x, y, z), Some(OAK_DOOR));
+                        for side in [-1, 1] {
+                            assert!(editor
+                                .get_block_absolute(x + nx * side, y, z + nz * side)
+                                .is_none_or(|b| b == AIR));
+                        }
+                        assert_eq!(editor.get_block_absolute(x, 3, z), Some(STONE_BRICKS));
+                    }
+                }
+            }
         }
     }
 

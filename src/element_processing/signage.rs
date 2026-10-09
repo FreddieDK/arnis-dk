@@ -1032,7 +1032,12 @@ fn right_dir(facing: i8) -> (i32, i32) {
 }
 
 /// Complete addresses use vanilla signs: four lines each, never silently truncated.
-fn place_address_sign(editor: &mut WorldEditor, anchor: &FacadeAnchor, text: &str) -> bool {
+fn place_address_sign(
+    editor: &mut WorldEditor,
+    anchor: &FacadeAnchor,
+    text: &str,
+    outline: &[ProcessedNode],
+) -> bool {
     let lines = split_lines(text, 15, usize::MAX);
     if lines.is_empty() || lines.len() > 8 {
         return false;
@@ -1042,36 +1047,64 @@ fn place_address_sign(editor: &mut WorldEditor, anchor: &FacadeAnchor, text: &st
     let facing = WorldEditor::facing_for_normal(nx, nz);
     let (rx, rz) = right_dir(facing);
     let (ax, az) = anchor.door.unwrap_or((anchor.x, anchor.z));
-    for offset in [1, -1, 2, -2, 3, -3] {
-        let (x, z) = (ax + rx * offset, az + rz * offset);
-        // Require a solid backing and room for every page before writing any.
-        let fits = (0..pages.len()).all(|p| {
-            let y = anchor.number_y + p as i32;
-            editor.get_block_absolute(x, y, z).is_some_and(|b| {
-                let n = b.name();
-                b != AIR
-                    && !is_see_through(b)
-                    && !n.ends_with("_door")
-                    && !n.ends_with("_stairs")
-                    && !n.ends_with("_slab")
-                    && !n.ends_with("_wall")
-                    && !n.contains("sign")
-            }) && editor.cell_open_at(x + nx, y, z + nz)
-                && !editor.cell_has_frame(x + nx, y, z + nz)
-                && editor.owns(x + nx, z + nz)
-                && y > editor.get_absolute_y(x + nx, 0, z + nz)
-        });
-        if !fits {
-            continue;
-        }
-        for (p, lines) in pages.iter().enumerate() {
-            let refs: Vec<_> = lines.iter().map(String::as_str).collect();
-            let y = anchor.number_y + (pages.len() - 1 - p) as i32;
-            if !editor.place_wall_sign_with_glow(x, y, z, facing, &refs, true) {
-                return false;
+    let mut candidates: Vec<_> = [1, -1, 2, -2, 3, -3]
+        .into_iter()
+        .map(|offset| (ax + rx * offset, az + rz * offset))
+        .collect();
+    // A rasterized diagonal/recessed facade is not in one plane. Follow this
+    // building's own outline, rather than searching arbitrary neighboring walls.
+    let mut outline_candidates = BTreeSet::new();
+    for pair in outline.windows(2) {
+        for (x, _, z) in bresenham_line(pair[0].x, 0, pair[0].z, pair[1].x, 0, pair[1].z) {
+            let lateral = (x - ax) * rx + (z - az) * rz;
+            let depth = (x - ax) * nx + (z - az) * nz;
+            if (1..=4).contains(&lateral.abs()) && depth.abs() <= 3 {
+                outline_candidates.insert((lateral.abs() + depth.abs(), x, z));
             }
         }
-        return true;
+    }
+    for (_, x, z) in outline_candidates {
+        if !candidates.contains(&(x, z)) {
+            candidates.push((x, z));
+        }
+    }
+    // Try the original height first, then a lower solid course or the lintel.
+    for bottom in [
+        anchor.number_y,
+        anchor.number_y - 1,
+        anchor.number_y + 1,
+        anchor.number_y + 2,
+    ] {
+        for &(x, z) in &candidates {
+            // Require a solid backing and room for every page before writing any.
+            let fits = (0..pages.len()).all(|p| {
+                let y = bottom + p as i32;
+                editor.get_block_absolute(x, y, z).is_some_and(|b| {
+                    let n = b.name();
+                    b != AIR
+                        && !is_see_through(b)
+                        && !n.ends_with("_door")
+                        && !n.ends_with("_stairs")
+                        && !n.ends_with("_slab")
+                        && !n.ends_with("_wall")
+                        && !n.contains("sign")
+                }) && editor.cell_open_at(x + nx, y, z + nz)
+                    && !editor.cell_has_frame(x + nx, y, z + nz)
+                    && editor.owns(x + nx, z + nz)
+                    && y > editor.get_absolute_y(x + nx, 0, z + nz)
+            });
+            if !fits {
+                continue;
+            }
+            for (p, lines) in pages.iter().enumerate() {
+                let refs: Vec<_> = lines.iter().map(String::as_str).collect();
+                let y = bottom + (pages.len() - 1 - p) as i32;
+                if !editor.place_wall_sign_with_glow(x, y, z, facing, &refs, true) {
+                    return false;
+                }
+            }
+            return true;
+        }
     }
     false
 }
@@ -1108,7 +1141,8 @@ pub fn generate_building_signage(
     let facing = WorldEditor::facing_for_normal(anchor.normal.0, anchor.normal.1);
     let (rx, rz) = right_dir(facing);
 
-    let address_placed = address.is_some_and(|text| place_address_sign(editor, &anchor, text));
+    let address_placed =
+        address.is_some_and(|text| place_address_sign(editor, &anchor, text, &way.nodes));
     if address_placed {
         ctx.note("address signs", anchor.x, anchor.number_y, anchor.z);
     }
@@ -2299,11 +2333,11 @@ mod tests {
         assert_eq!(lines.join(" "), text);
         assert!(lines.iter().all(|s| s.chars().count() <= 15));
         assert!(
-            !place_address_sign(&mut editor, &anchor, text),
+            !place_address_sign(&mut editor, &anchor, text, &[]),
             "no floating signs"
         );
         editor.set_block_absolute(STONE_BRICKS, 19, 2, 20, None, None);
-        assert!(place_address_sign(&mut editor, &anchor, text));
+        assert!(place_address_sign(&mut editor, &anchor, text, &[]));
         assert_eq!(editor.get_block_absolute(19, 2, 19), Some(SPRUCE_WALL_SIGN));
         assert!(
             editor
@@ -2330,14 +2364,44 @@ mod tests {
         assert_eq!(lines.join(" "), text);
         assert!(lines.len() > 4 && lines.len() <= 8);
         editor.set_block_absolute(STONE_BRICKS, 19, 2, 20, None, None);
-        assert!(!place_address_sign(&mut editor, &anchor, text));
+        assert!(!place_address_sign(&mut editor, &anchor, text, &[]));
         assert!(editor
             .get_block_absolute(19, 2, 19)
             .is_none_or(|b| b == AIR));
         editor.set_block_absolute(STONE_BRICKS, 19, 3, 20, None, None);
-        assert!(place_address_sign(&mut editor, &anchor, text));
+        assert!(place_address_sign(&mut editor, &anchor, text, &[]));
         for y in [2, 3] {
             assert_eq!(editor.get_block_absolute(19, y, 19), Some(SPRUCE_WALL_SIGN));
+        }
+    }
+
+    #[test]
+    fn address_sign_follows_own_diagonal_wall_and_can_use_a_lower_course() {
+        use crate::element_processing::building_test_support::{rect_way, test_editor};
+        let xz = XZBBox::rect_from_xz_lengths(40.0, 40.0).unwrap();
+        let anchor = FacadeAnchor {
+            x: 20,
+            z: 20,
+            normal: (0, -1),
+            fascia_y: 4,
+            number_y: 2,
+            door: Some((20, 20)),
+        };
+        let text = "Herrestræde 1C, 4200 Slagelse";
+        let mut way = rect_way(1, 20, 20, 30, 30, &[]);
+        way.nodes[1].z = 25;
+        for y in [1, 2] {
+            let mut editor = test_editor(&xz);
+            editor.set_block_absolute(STONE_BRICKS, 22, y, 21, None, None);
+            assert!(
+                !place_address_sign(&mut editor, &anchor, text, &[]),
+                "do not use an arbitrary nearby wall from another building"
+            );
+            assert!(place_address_sign(&mut editor, &anchor, text, &way.nodes));
+            assert_eq!(editor.get_block_absolute(22, y, 20), Some(SPRUCE_WALL_SIGN));
+            assert!(editor
+                .get_block_absolute(20, y, 19)
+                .is_none_or(|b| b == AIR));
         }
     }
 

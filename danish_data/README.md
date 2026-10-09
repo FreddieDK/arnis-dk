@@ -177,26 +177,53 @@ to skilte bruges, øverst først, hvis hele adressen kræver flere linjer. Der
 skal være plads til alle sider; ellers bruges det gamle husnummer-fallback.
 Teksten afkortes ikke. Danske bogstaver bevares som Unicode i NBT-teksten.
 
+Skiltplaceringen prøver først ved siden af døren som før og dernæst punkter
+på den samme bygnings rasteriserede omrids, højst fire blokke til siden og
+tre blokke i dybden. Den prøver også én blok lavere og op til to blokke højere,
+hvis den oprindelige højde er glas eller mangler massiv væg. Alle skiltets
+sider skal stadig have fast underlag og fri plads foran. Adresser kræver
+fortsat `arnis:address`; manglende eller tvetydigt matchede adresser gættes ikke.
+
 Fejlen ved Herrestræde 1C kunne reproduceres i regionfilen: døren stod i en
 skrå rastervæg, hvor en side kun havde diagonal kontakt til døren. Efter
-alle facade- og dekorationspas udfylder `finish_dar_doorway` kun luftceller
-umiddelbart ved siden af DAR-dørens to blokke. Materialet tages fra den
+alle facade- og dekorationspas udfylder `finish_doorway` kun luftceller
+umiddelbart ved siden af dørens to blokke. Rettelsen gælder alle planlagte
+indgange: DAR, OSM, automatisk placerede indgange og dobbeltdøre. Den arbejder
+kun på intakte dørpar og bevarer begge dørblade ved dobbeltdøre. Materialet tages fra den
 tilstødende væg i samme højde, så fx stensoklen fortsætter ind til døren.
 Bygningens vægmateriale bruges kun som fallback. Eksisterende facadeblokke
 og overligger bevares; en overligger tilføjes kun, hvis den mangler.
 Der tilføjes ikke længere hele tre blokke høje træstolper. Selve døren og
-passagen bevares; andre indgange får ikke denne behandling. Regressionstesten
-bruger den rapporterede bygnings skrå omrids og kontrollerer lukkede sider,
-bevaret facade/overligger samt fri passage foran/bagved døren.
+passagen bevares. Regressionstestene bruger den rapporterede bygnings skrå
+omrids både med og uden DAR-tag, og kontrollerer enkelt- og dobbeltdøre i alle
+fire retninger: lukkede sider, bevaret facade/overligger samt fri passage.
+
+Skure og garager brugte tidligere `generate_special_doors`, som placerede
+dørblokke uden `facing` og uden at registrere dem i `entrance_plans`. De bruger
+nu `plan_special_door` og samme `render_entrance`/`finish_doorway` som andre
+indgange. Deres eksisterende valg af dørposition bevares, men retningen beregnes
+fra vægsegmentet og omridsets orientering; dobbeltdøre får modsatte hængsler.
+Facadedekoration og adresseskiltets anker kender dermed også disse døre.
 
 
-Verificeret på samme Slagelse-område: 345 almindelige adresseskilte i den
-færdige verdensfil. Skiltet ved Herrestræde 1C indeholder præcis
-"Herrestræde 1C," og "4200 Slagelse" på hver sin linje. Den tidligere åbne
-karmcelle (312,-49,482) er udfyldt, begge dørhalvdele er bevaret, og felterne
-foran og bagved døren er fri. Efter den diskrete karmrettelse er den gamle
-sokkel, facade og overligger bevaret, og kun to sideblokke tilføjes ved 1C:
-brosten nederst og granstamme ovenover. Alle 345 adresseskilte er kontrolleret
-for lysende hvid tekst i NBT. 296 element-/bygningstests bestod (2 ignoreret)
-og 70 world-editor-tests bestod; release-build og GUI-check bestod.
-Kontrollen er foretaget i verdensfilerne, ikke visuelt i Minecraft.
+Verificeret på samme Slagelse-område med samme OSM- og danske inputfiler:
+
+- 967 intakte dørpar i det nye kort; alle 966 tidligere intakte dørpar er bevaret.
+- Døre med luft i et af de fire sidefelter: 598 før, 0 efter.
+- 306 tidligere ikke-orienterede dørpar har nu eksplicit retning.
+- 505 almindelige adresseskilte mod 345 før; alle kontrolleret for korrekt
+  skiltblok, lysende hvid tekst og bevaret fuld adresse ved Herrestræde 1C.
+- 299 element-/bygningstests bestod (2 ignoreret); release-build og GUI-check bestod.
+
+Auditten kontrollerer dørens to sidefelter i begge højder og sammenholder
+blokdata fra de to verdensfiler. Den er ikke en visuel Minecraft-kontrol og
+beviser ikke, at hele bygningens facade er uden andre huller. To isolerede
+nedre dørblokke og ét dørpar uden eksplicit retning fra andre genereringsveje
+findes stadig i området; de isolerede blokke tælles ikke som intakte dørpar.
+Det uorienterede par har ingen tomme sidefelter ved standardretningen.
+
+Herrestræde 1C er kontrolleret igen: skiltet indeholder "Herrestræde 1C," og
+"4200 Slagelse" på hver sin linje, og passagen er fri. Facade og overligger
+bevares ved karmreparationen. Manglende adresseskilte kan fortsat skyldes
+manglende/ikke-entydig registerkobling, manglende facadeanker eller manglende
+plads til alle tekstens sider; der opfindes ingen adresser eller underlag.
