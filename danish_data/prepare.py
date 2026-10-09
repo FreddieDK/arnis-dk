@@ -165,7 +165,19 @@ def prepare(geodanmark, bbr=None, dar=None, bbox=None, at=None):
         seen.add(key)
         selected.append((key, row, polygon))
     bbr_rows = lookup(bbr, {identity(r.get("BBRUUID")) for _, r, _ in selected}, "6", at)
-    dar_rows = lookup(dar, {identity(r.get("husnummer")) for r in bbr_rows.values()}, "3", at)
+    primary_ids = {identity(r.get("husnummer")) for r in bbr_rows.values()}
+    dar_rows, building_addresses = {}, {}
+    if dar:
+        for address in rows(dar):
+            dar_id = identity(address.get('id_lokalId'))
+            building_id = identity(address.get('geoDanmarkBygning'))
+            if not active(address, '3', at) or (dar_id not in primary_ids and building_id not in seen):
+                continue
+            if not dar_id or dar_id in dar_rows:
+                raise ValueError('Ambiguous current DAR house number')
+            dar_rows[dar_id] = address
+            if building_id in seen:
+                building_addresses.setdefault(building_id, []).append(address)
     elements, ids = [], set()
 
     def osm_id(key):
@@ -205,8 +217,20 @@ def prepare(geodanmark, bbr=None, dar=None, bbox=None, at=None):
                 counts["dar_matches"] += 1
                 hint = entrance_tags(address, key, geometry, at)
                 tags.update(hint)
-                if hint:
-                    counts['entrance_hints_' + hint['arnis:entrance:standard']] += 1
+        hints = []
+        for address in sorted(building_addresses.get(key, []), key=lambda r: identity(r['id_lokalId'])):
+            hint = entrance_tags(address, key, geometry, at)
+            full_address = address.get('adgangsadressebetegnelse')
+            if hint and isinstance(full_address, str) and full_address.strip():
+                hints.append({'address': ' '.join(full_address.split()),
+                              'lat': float(hint['arnis:entrance:lat']),
+                              'lon': float(hint['arnis:entrance:lon']),
+                              'standard': hint['arnis:entrance:standard']})
+                counts['entrance_hints_' + hint['arnis:entrance:standard']] += 1
+        if hints:
+            tags['arnis:entrances'] = json.dumps(hints, ensure_ascii=False, allow_nan=False)
+        elif 'arnis:entrance:standard' in tags:
+            counts['entrance_hints_' + tags['arnis:entrance:standard']] += 1
         polygons = [geometry] if geometry.geom_type == "Polygon" else list(geometry.geoms)
         if len(polygons) == 1 and not polygons[0].interiors:
             way(key + "/outline", polygons[0].exterior, tags)
@@ -244,8 +268,6 @@ def main():
         bounds = [float(value) for value in args.bbox.split(",")]
         if len(bounds) != 4 or not all(math.isfinite(n) for n in bounds) or not (-90 <= bounds[0] < bounds[2] <= 90 and -180 <= bounds[1] < bounds[3] <= 180):
             raise ValueError("Invalid bbox")
-        if args.dar and not args.bbr:
-            raise ValueError("DAR requires --bbr for the building-to-address join")
         at = datetime.fromisoformat(args.at.replace("Z", "+00:00")) if args.at else None
         result = prepare(args.geodanmark, args.bbr, args.dar, bounds, at)
         args.output.parent.mkdir(parents=True, exist_ok=True)

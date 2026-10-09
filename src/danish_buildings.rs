@@ -172,6 +172,7 @@ fn merge(
                     "arnis:entrance:lat",
                     "arnis:entrance:lon",
                     "arnis:entrance:standard",
+                    "arnis:entrances",
                 ] {
                     if let Some(value) = element.tags().get(key) {
                         if !tags.contains_key(key) {

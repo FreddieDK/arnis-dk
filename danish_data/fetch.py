@@ -113,13 +113,13 @@ def download_rows(register, where, at, key, transport=request_page):
     raise ValueError(f'{register}: page limit reached; reduce bbox')
 
 
-def linked_rows(register, ids, at, key, transport):
+def linked_rows(register, ids, at, key, transport, field='id_lokalId'):
     ids = sorted({identity(value) for value in ids if identity(value)})
     result = []
     for start in range(0, len(ids), 100):
         batch = ids[start:start+100]
-        rows = download_rows(register, {'id_lokalId': {'in': batch}}, at, key, transport)
-        if any(identity(row.get('id_lokalId')) not in batch for row in rows):
+        rows = download_rows(register, {field: {'in': batch}}, at, key, transport)
+        if any(identity(row.get(field)) not in batch for row in rows):
             raise ValueError(f'{register}: response contains an unrequested identity')
         result.extend(rows)
     return result
@@ -149,7 +149,22 @@ def fetch(bbox, key, at=None, transport=request_page):
     bbr = linked_rows('BBR', [row.get('BBRUUID') for row in converted], at, key, transport)
     bbr = [{ALIASES.get(k, k): v for k, v in row.items()} for row in bbr if active(row, '6', at)]
     dar = linked_rows('DAR', [row.get('husnummer') for row in bbr], at, key, transport)
-    dar = [row for row in dar if active(row, '3', at)]
+    # BBR names only the building's primary house number. Other entrances can
+    # have their own DAR house numbers on the exact same GeoDanmark building.
+    related = linked_rows('DAR', [row.get('id_lokalId') for row in converted], at, key,
+                          transport, field='geoDanmarkBygning')
+    dar_index = {}
+    for source in (dar, related):
+        seen = set()
+        for row in source:
+            if not active(row, '3', at):
+                continue
+            dar_id = identity(row.get('id_lokalId'))
+            if not dar_id or dar_id in seen or (dar_id in dar_index and dar_index[dar_id] != row):
+                raise ValueError('DAR: ambiguous current house number')
+            seen.add(dar_id)
+            dar_index[dar_id] = row
+    dar = [dar_index[k] for k in sorted(dar_index)]
     points = linked_rows('DAR_POINT', [row.get('adgangspunkt') for row in dar], at, key, transport)
     point_index = {}
     for point in points:

@@ -112,5 +112,27 @@ class PrepareTests(unittest.TestCase):
             self.assertFalse(any('arnis:entrance:lat' in e.get('tags',{}) for e in doc['elements']))
 
 
+    def test_multiple_house_numbers_on_one_building_preserve_individual_points(self):
+        addresses=[]
+        for n,x in [(14,650003),(16,650007)]:
+            row=self.access(x=x)
+            row.update(id_lokalId=f'dar-{n}',adgangsadressebetegnelse=f'Testvej {n}, 4200 Slagelse')
+            addresses.append(row)
+        for bbr in ([],[self.bbr]):
+            doc=self.run_prepare(bbr=bbr,dar=addresses)
+            tags=next(e['tags'] for e in doc['elements'] if e['type']=='way')
+            hints=json.loads(tags['arnis:entrances'])
+            self.assertEqual([h['address'] for h in hints],['Testvej 14, 4200 Slagelse','Testvej 16, 4200 Slagelse'])
+            self.assertNotEqual(hints[0]['lon'],hints[1]['lon'])
+            self.assertEqual(doc['arnis_dk']['counts']['entrance_hints_TD'],2)
+        invalid=copy.deepcopy(addresses)
+        invalid[0]['geoDanmarkBygning']='neighbour'
+        invalid[1]['_arnis_adgangspunkt']['oprindelse_tekniskStandard']='TN'
+        tags=next(e['tags'] for e in self.run_prepare(dar=invalid)['elements'] if e['type']=='way')
+        self.assertNotIn('arnis:entrances',tags)
+        with self.assertRaisesRegex(ValueError,'Ambiguous'):
+            self.run_prepare(dar=addresses+[addresses[0]])
+
+
 if __name__ == "__main__":
     unittest.main()

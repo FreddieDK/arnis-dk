@@ -26,7 +26,7 @@ class FetchTests(unittest.TestCase):
             'GEODKV':[{'id_lokalId':'geo','status':'Anlagt','geometristatus':'Endelig','BBRUUID':'bbr',
                       'geometri':{'crs':25832,'wkt':'POLYGON EMPTY'}}],
             'BBR':[{'id_lokalId':'bbr','status':'6','husnummer':'dar'}],
-            'DAR':[{'id_lokalId':'dar','status':'3','adgangspunkt':'POINT-1'}],
+            'DAR':[{'id_lokalId':'dar','status':'3','adgangspunkt':'POINT-1','geoDanmarkBygning':'geo'}],
             'DAR_POINT':[{'id_lokalId':'point-1','status':'8','oprindelse_tekniskStandard':'TD',
                           'position':{'wkt':'POINT (650005 6150003)','crs':25832}}]}
         def transport(register,query,variables,key):
@@ -52,7 +52,7 @@ class FetchTests(unittest.TestCase):
         records = {'GEODKV': [outline], 'BBR': [{'id_lokalId': 'bbr-1', 'status': '6',
                    'husnummer': 'DAR-1', 'byg032YdervaeggensMateriale': '1',
                    'byg033Tagdaekningsmateriale': '5', 'byg026Opfoerelsesaar': 1920}],
-                   'DAR': [{'id_lokalId': 'dar-1', 'status': '3', 'husnummertekst': '16'}]}
+                   'DAR': [{'id_lokalId': 'dar-1', 'status': '3', 'husnummertekst': '16','geoDanmarkBygning':'geo-1'}]}
         def transport(register, query, variables, key):
             calls.append((register, query, variables))
             self.assertEqual(key, 'secret')
@@ -78,6 +78,26 @@ class FetchTests(unittest.TestCase):
                                     'geometri': {'crs': 4326, 'wkt': 'POLYGON EMPTY'}}])
         with self.assertRaisesRegex(ValueError, '25832'):
             fetch(BBOX, 'secret', NOW, transport)
+
+    def test_secondary_house_numbers_are_fetched_without_primary_bbr_link(self):
+        def transport(register, query, variables, key):
+            self.assertEqual(variables['at'], NOW.isoformat())
+            if register == 'GEODKV':
+                return page(register, [{'id_lokalId':'geo','status':'Anlagt','geometristatus':'Endelig',
+                                       'geometri':{'crs':25832,'wkt':'POLYGON EMPTY'}}])
+            if register == 'DAR':
+                self.assertEqual(variables['where'], {'geoDanmarkBygning':{'in':['geo']}})
+                return page(register, [{'id_lokalId':f'dar-{n}','status':'3',
+                                       'geoDanmarkBygning':'geo','adgangspunkt':f'point-{n}'} for n in (14,16)])
+            if register == 'DAR_POINT':
+                return page(register, [{'id_lokalId':f'point-{n}','status':'8'} for n in (14,16)])
+            self.fail('No BBR request without a BBR link')
+        _,_,dar,_ = fetch(BBOX,'secret',NOW,transport)
+        self.assertEqual([r['id_lokalId'] for r in dar], ['dar-14','dar-16'])
+        self.assertTrue(all(r['_arnis_adgangspunkt'] for r in dar))
+        with self.assertRaisesRegex(ValueError,'unrequested'):
+            linked_rows('DAR',['geo'],NOW,'secret',lambda register,*_:page(register,[
+                {'id_lokalId':'dar','geoDanmarkBygning':'neighbour'}]),field='geoDanmarkBygning')
 
     def test_empty_outline_response_never_downloads_entire_linked_register(self):
         calls = []

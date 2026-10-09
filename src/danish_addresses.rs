@@ -19,6 +19,36 @@ pub(super) struct AddressHint {
 }
 
 impl AddressHint {
+    /// Source hints contain geographic coordinates only. Wall restrictions are
+    /// derived from the projected source outline, never trusted from JSON input.
+    pub fn from_source(tags: &HashMap<String, String>) -> Vec<Self> {
+        if let Some(value) = tags.get("arnis:entrances") {
+            let hints: Vec<Self> = serde_json::from_str(value).unwrap_or_default();
+            let mut hints: Vec<_> = hints
+                .into_iter()
+                .filter(|h| {
+                    h.lat.is_finite()
+                        && h.lon.is_finite()
+                        && matches!(h.standard.as_str(), "TD" | "TK")
+                        && !h.address.trim().is_empty()
+                })
+                .map(|mut h| {
+                    h.walls.clear();
+                    h
+                })
+                .collect();
+            hints.sort_by(|a, b| {
+                a.address
+                    .cmp(&b.address)
+                    .then(a.lat.total_cmp(&b.lat))
+                    .then(a.lon.total_cmp(&b.lon))
+            });
+            hints.dedup_by(|a, b| a.address == b.address && a.lat == b.lat && a.lon == b.lon);
+            hints
+        } else {
+            Self::from_tags(tags).into_iter().collect()
+        }
+    }
     pub fn from_tags(tags: &HashMap<String, String>) -> Option<Self> {
         let lat = tags.get("arnis:entrance:lat")?.parse::<f64>().ok()?;
         let lon = tags.get("arnis:entrance:lon")?.parse::<f64>().ok()?;
@@ -55,11 +85,13 @@ pub(super) fn attach(
 ) {
     let mut collected: BTreeMap<usize, Vec<AddressHint>> = BTreeMap::new();
     for source in incoming {
-        let Some(mut hint) =
-            AddressHint::from_tags(source.tags()).filter(|h| !h.address.trim().is_empty())
-        else {
+        let mut hints: Vec<_> = AddressHint::from_source(source.tags())
+            .into_iter()
+            .filter(|h| !h.address.trim().is_empty())
+            .collect();
+        if hints.is_empty() {
             continue;
-        };
+        }
         let Some(shape) = footprint(source) else {
             continue;
         };
@@ -76,13 +108,16 @@ pub(super) fn attach(
             })
             .collect();
         // The snapped entrance must also stay on this Danish building's wall.
-        hint.walls = super::entrances::ways(source)
+        let walls: Vec<_> = super::entrances::ways(source)
             .into_iter()
             .flat_map(|w| w.nodes.windows(2).map(|p| [p[0].x, p[0].z, p[1].x, p[1].z]))
             .collect();
         if owners.len() == 1 {
             // Competing containing outlines are ambiguous; proximity is not enough.
-            collected.entry(owners[0]).or_default().push(hint);
+            for hint in &mut hints {
+                hint.walls = walls.clone();
+            }
+            collected.entry(owners[0]).or_default().extend(hints);
         }
     }
     for (i, mut hints) in collected {

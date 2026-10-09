@@ -199,7 +199,7 @@ pub(super) fn apply(
         let hints: Vec<AddressHint> = tags
             .get(HINTS)
             .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or_else(|| AddressHint::from_tags(tags).into_iter().collect());
+            .unwrap_or_else(|| AddressHint::from_source(tags));
         let mut planned = vec![];
         for hint in hints {
             let (lat, lon) = (hint.lat, hint.lon);
@@ -466,6 +466,46 @@ mod tests {
             5,
             "existing OSM entrances remain authoritative"
         );
+    }
+
+    #[test]
+    fn source_address_list_places_each_door_on_added_and_matched_buildings() {
+        let (mut source, args) = hinted_rectangle();
+        let (transform, _) = crate::projection::ProjectionSpec::from_args(&args)
+            .transformer(&args.bbox.unwrap())
+            .unwrap();
+        let mut a = AddressHint::from_tags(source.tags()).unwrap();
+        a.address = "Testvej 14A, 4200 Slagelse".into();
+        let mut b = a.clone();
+        b.address = "Testvej 16, 4200 Slagelse".into();
+        b.lon += 6.0 / transform.scale_factor_x() * 0.002;
+        if let ProcessedElement::Way(w) = &mut source {
+            w.tags.insert(
+                "arnis:entrances".into(),
+                serde_json::to_string(&vec![a.clone(), b.clone(), a]).unwrap(),
+            );
+        }
+        for matched in [false, true] {
+            let mut elements = vec![];
+            if matched {
+                let mut existing = source.clone();
+                if let ProcessedElement::Way(w) = &mut existing {
+                    w.id = 2;
+                    w.tags = HashMap::from([("building".into(), "house".into())]);
+                }
+                elements.push(existing);
+            }
+            super::super::merge(&mut elements, vec![source.clone()], true);
+            apply(&mut elements, &args, args.bbox.unwrap()).unwrap();
+            let doors: Vec<_> = ways(&elements[0])[0]
+                .nodes
+                .iter()
+                .filter(|n| n.tags.contains_key("arnis:address"))
+                .collect();
+            assert_eq!(doors.len(), 2, "matched={matched}");
+            assert_eq!((doors[1].x, doors[1].z), (33, 20));
+            assert_eq!(doors[1].tags["arnis:address"], b.address);
+        }
     }
 
     #[test]

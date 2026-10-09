@@ -15,9 +15,12 @@ kun GeoDanmark-bygninger og tilknyttede BBR-/DAR-egenskaber.
 3. `GEODKV_Bygning` vælges med `geometri.intersects`, status `Anlagt` og
    geometristatus `Endelig`. Bygninger under terræn udelades. `prepare.py`
    foretager den endelige afgrænsning mod det oprindelige WGS84-område.
-4. BBR hentes med GeoDanmarks `BBRUUID`; DAR hentes med BBR's `husnummer`.
-   Der sendes højst 100 UUID'er i hvert `id_lokalId.in`-filter. En tom liste
-   medfører ingen forespørgsel. Ukendte returnerede UUID'er afvises.
+4. BBR hentes med GeoDanmarks `BBRUUID`. DAR hentes både med BBR's `husnummer`
+   og via `geoDanmarkBygning.in` for alle valgte GeoDanmark-bygninger, så øvrige
+   husnumre på samme bygning kommer med. Hvert filter har højst 100 ID'er.
+   En tom liste medfører ingen forespørgsel. Ukendte returnerede links afvises.
+   Identiske DAR-poster fra de to søgeveje samles; modstridende eller flere
+   aktuelle versioner inden for samme søgevej afvises.
 5. Alle forespørgsler bruger samme UTC-tidspunkt som `registreringstid` og
    `virkningstid`. Pagination bruger `first: 100`, `after` og
    `pageInfo { hasNextPage endCursor }`. Manglende/stagnerende pagination eller
@@ -111,23 +114,26 @@ aktuelle GeoDanmark-bygnings ID. Dette forhindrer, at et fælles husnummer på
 BBR-bygninger giver hoveddøre på alle ejendommens garager og udhuse. Punktets
 EPSG:25832-geometri skal være et gyldigt punkt inde i bygningspolygonen.
 
-Supplementet får `arnis:entrance:lat`, `arnis:entrance:lon` og
-`arnis:entrance:standard`. Disse føres med gennem den eksisterende entydige
-OSM/GeoDanmark-sammenkædning. Efter bygningsmerge anvender
+Supplementet får en JSON-liste i `arnis:entrances`, med `address`, `lat`, `lon`
+og `standard` for hvert kvalificeret husnummer på den præcise GeoDanmark-bygning.
+Denne kobling kræver ikke, at adressen er BBR's hovedadresse, eller at bygningen
+har et BBR-match. De ældre enkeltfelter `arnis:entrance:lat`,
+`arnis:entrance:lon` og `arnis:entrance:standard` bevares som bagudkompatibilitet.
+En ny generator foretrækker listen, så hovedadressen ikke indsættes to gange.
+Efter bygningsmerge anvender
 `src/danish_entrances.rs` samme `ProjectionSpec` som resten af Arnis og:
 
 - Bevarer alle eksisterende OSM-entrance/door-annotationer på omridset.
 - Accepterer kun en nærliggende væg, højst 6 meter plus én blok til afrunding.
 - Afviser uklare valg mellem vægge, punkter ved hjørner og afklippede kortkanter.
 - Afviser vægge, hvis trinnet udenfor går ind i en anden kendt bygning.
-- Indsætter højst én DAR-indgang pr. matchet bygning som en normal `entrance=yes`
-  node på omridset. Multipolygoner og gårdrum bevares.
+- Indsætter hver sikker, adskilt DAR-indgang som en normal `entrance=yes`
+  node med egen adresse på omridset. Multipolygoner og gårdrum bevares.
 
 Arnis' eksisterende mapped-entrance-kode bygger derefter selve døren og bruger
-indgangen som anker for husnummerskiltet. Vi ændrer ikke upstreams generelle
-facade- eller skiltegenerator. Indvendige dørpunkter og alle øvrige adresser på
-en bygning hentes ikke; dette er en forbedring af den BBR-koblede adgang,
-ikke en komplet registrering af alle indgange. Afviste hints falder tilbage
+indgangen som anker for adresseskiltet. Indvendige dørpunkter hentes ikke;
+de ekstra husnumre findes via deres præcise GeoDanmark-link. Det er stadig
+ikke en komplet registrering af alle fysiske indgange. Afviste hints falder tilbage
 til Arnis' normale dørvalg. TD og TK ligger typisk ca. 3 meter inde i bygningen;
 selv TD giver derfor ikke en garanti for præcis dørplacering i blokgitteret.
 
@@ -301,3 +307,33 @@ Dette er kontrol af verdensfilen, ikke visuel kontrol i Minecraft.
 Manglende eller tvetydige registerkoblinger, eksisterende OSM-indgange uden
 en sikker individuel adressekobling og manglende fysisk skiltplads kan stadig
 give døre uden adresse. En fælles adresse gentages ikke ukritisk ved alle døre.
+
+### Flere DAR-husnumre på én GeoDanmark-bygning
+
+En GeoDanmark-bygning kan have flere DAR-husnumre, selv om den tilknyttede
+BBR-bygning kun peger på ét hovedhusnummer. Den tidligere hentning manglede
+derfor nogle af bygningens indgange. Dette er rettet generelt, uden
+adresse- eller koordinatspecifikke undtagelser.
+
+`fetch.py` følger nu både BBR's hovedhusnummer og DAR's `geoDanmarkBygning`.
+Samme snapshot-tid, statuskontrol, pagination og batchgrænse gælder begge veje.
+`prepare.py` grupperer alle aktive DAR-husnumre efter det præcise bygnings-ID
+og skriver de kvalificerede punkter i `arnis:entrances` (beskrevet ovenfor).
+BBR-materialer og det eksisterende hovedadressefelt ændres ikke af ekstra
+husnumre. Gamle snapshotfiler indeholder ikke de manglende adresser: hent et
+nyt supplement med `fetch.py`, før kortet genereres igen.
+
+`AddressHint::from_source` læser listen, fjerner dubletter og afviser tomme
+adresser/ukendte kvalitetsklasser. Gamle enkeltfelter bruges kun, når listen
+ikke findes. Projektionsbestemte `walls` læses ikke fra kildelisten; de dannes
+af GeoDanmark-omridset ved adressekoblingen. Listen følger både nye danske
+bygninger, entydige 1:1-match og adresser inde i større OSM-omrids. Eksisterende
+OSM-indgange, hjørner, fællesvægge og kolliderende dørpositioner behandles med
+de samme konservative regler som før.
+
+Verificeret på Slagelse-området med samme OSM-fil og nyt dansk udtræk:
+1.298 almindelige adresseskilte mod 913 før. Flere husnumre på samme
+bygning har hver sin dør og fulde adresse. Alle 1.614 intakte dørpar havde lukkede
+sidefelter. De 22 Python-tests og 14 danske Rust-tests bestod, samt release-build
+og GUI-check. Det er kontrol af den gemte verden; TK-punkterne angiver fortsat
+facader og garanterer ikke den præcise placering af en virkelig dør.
