@@ -21,7 +21,9 @@ Se også [upstreams dokumentation](README.upstream.md).
 
 ## Danske bygninger
 
-Importen læser officielle **Current JSON-entitetsudtræk** fra Datafordeleren:
+Danske bygningsdata kan nu hentes automatisk for et valgt område via
+**Datafordeler GraphQL v2**. Importen understøtter også officielle
+**Current JSON-entitetsudtræk** fra Datafordeleren:
 
 | Register og entitet | Bidrag |
 | --- | --- |
@@ -29,12 +31,46 @@ Importen læser officielle **Current JSON-entitetsudtræk** fra Datafordeleren:
 | BBR / Bygning | Anvendelse, etager, materialer, opførelsesår |
 | DAR / Husnummer | Husnummer knyttet til BBR-bygningens adresse-id |
 
+### Hent data til det valgte område
+
+Opret et IT-system med en API-nøgle i Datafordeler Administration. Gem nøglen i
+`.local/datafordeler.env` som `DATAFORDELER_API_KEY=...`, eller sæt miljøvariablen
+`DATAFORDELER_API_KEY`. Filen `.local/datafordeler.env` må ikke committes; hele
+`.local/` er Git-ignoreret. Hentning bruger nøglen direkte fra filen eller miljøet,
+så den ikke skal indgå i kommandoen.
+
+```powershell
+python -m venv .local/venv
+.\.local\venv\Scripts\python.exe -m pip install -r danish_data/requirements.txt
+.\.local\venv\Scripts\python.exe danish_data/fetch.py --credentials-file .local/datafordeler.env --bbox "55.400,11.350,55.403,11.355" --output .local/data/herrestraede-buildings.json
+.\target\release\arnis.exe --bbox "55.400,11.350,55.403,11.355" --danish-buildings .local/data/herrestraede-buildings.json --output-dir .local/worlds/Herrestraede
+```
+
+Hentningen begrænses til højst 10 km² ad gangen. Den spørger først efter
+GeoDanmarks bygninger i området og henter derefter kun BBR- og DAR-poster med de
+tilknyttede UUID'er. Manglende forbindelser erstattes ikke af et nærmeste-adresse-gæt.
+Der hentes ingen terrændata; terrænet håndteres fortsat af Arnis/Mapterhorn.
+
+De tre kildelister gemmes i en dateret mappe ved siden af resultatfilen. Den
+forberedte fil kan genbruges direkte i Arnis uden nye registeropslag. En ny
+kørsel af `fetch.py` henter et nyt snapshot; der er endnu ingen automatisk
+cacheudløb eller GUI-knap. Fejl under hentning eller konvertering overskriver
+ikke en tidligere færdig resultatfil.
+
+Arnis læser fortsat det færdige supplement via `--danish-buildings` eller
+`ARNIS_DK_BUILDINGS`; hentningen er et separat forberedelsestrin. Den er endnu
+ikke koblet til Minecraft Danmarks Creative-/GeoGuessr-worker.
+
+Se [danish_data/README.md](danish_data/README.md) for API-kontrakt, test og
+teknisk overdragelse til næste udvikler/agent.
+
+### Brug allerede downloadede udtræk
+
 Hver inputfil skal være et JSON-array eller en ZIP med præcis én JSON-fil.
 GeoDanmarks `geometri` skal være WKT i **EPSG:25832**. Der foretages ingen
 automatisk detektion af koordinatsystemet. BBR og DAR er valgfrie.
 Download data gennem [Datafordeleren](https://datafordeler.dk/).
-Der er endnu **ingen automatisk hentning af danske registre** i Arnis eller en
-filvælger i GUI'en; udtræk forberedes med værktøjet nedenfor. Gem udtræk og
+Manuelle udtræk forberedes med værktøjet nedenfor. Gem udtræk og
 eventuelle adgangsnøgler under den Git-ignorerede `.local/`.
 
 ```powershell
