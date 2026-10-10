@@ -1,88 +1,84 @@
-# Spring åbent hav over i store Meld-job
+# Skip open sea in large jobs
 
-Med `--land-mask` springer planlæggeren hele delområder over, når de ligger
-helt ude på åbent hav. De markeres `skipped_ocean` i planen og sendes hverken
-til Datafordeler eller Arnis. Arnis One World bruger `--world-type void`, så
-ikke-genererede områder forbliver tomme ved almindelig Minecraft-generering.
-Øerne beholder deres geografiske afstand og placering i den fælles verden.
+The [Meld planner](MELD.md) accepts `--land-mask` to skip cells that are entirely
+open sea. They are marked `skipped_ocean` and are not sent to Datafordeler or
+Arnis. One World uses `--world-type void`, so ungenerated areas remain empty
+under normal Minecraft generation. Islands retain their geographic spacing.
 
-Dette ændrer kun udvælgelsen af delområder. Terræn og selve kystens udformning
-genereres fortsat af Arnis/Mapterhorn; der er ingen DHM- eller kystrettelse.
+The filter selects cells; Arnis/Mapterhorn still generates terrain and coastlines.
+It does not clip generated blocks to an exact coastline or national border.
 
-## Forbered kystdata én gang
+## Prepare a land mask
 
-Installer projektets Python-afhængigheder. Download de detaljerede, opdelte
-**WGS84-landpolygoner** fra [OSM land polygons](https://osmdata.openstreetmap.de/data/land-polygons.html).
-Arkivet er omkring 930 MB ved denne tests dato. Gem det lokalt, f.eks. under
-`.local/data/land-polygons-split-4326.zip`. Det er en engangsoverførsel, og det
-samme arkiv kan bruges til mange planer. Download kræver ingen API-nøgle.
+Activate the Python environment from the [setup guide](README.md) and install
+`danish_data/requirements.txt`. Download the detailed, split **WGS84 land polygons**
+from [OSM land polygons](https://osmdata.openstreetmap.de/data/land-polygons.html)
+and save the archive as `.local/data/land-polygons-split-4326.zip`.
+The download requires no API key and can be reused for many plans.
 
-```powershell
-.\.local\venv\Scripts\python.exe -m pip install -r danish_data/requirements.txt
-.\.local\venv\Scripts\python.exe danish_data/ocean_mask.py --archive .local/data/land-polygons-split-4326.zip --output .local/data/land-mask-dk.json
+```sh
+python danish_data/ocean_mask.py --archive .local/data/land-polygons-split-4326.zip --output .local/data/land-mask-dk.json
 ```
 
-På Linux erstattes Python-stien med din Python 3.12+-installation/venv.
-Der behøves ingen ny Rust-build. Standarddækningen for masken er
-`53,6,59,17`, inklusive nabolandenes land og små øer. Masken gemmes lokalt,
-med kildehenvisning og arkivets SHA-256. Den fylder omkring 234 MB i denne test.
-Der kopieres ikke kystdata eller private nøgler ind i Git-repositoryet.
+The default mask coverage is `53,6,59,17` in south/west/north/east order. It
+includes Denmark, neighbouring land and small islands. Use `--bbox` to choose
+another coverage area. Preparation stores source attribution and the archive's
+SHA-256 in the local mask. No new Rust build is required.
 
-## Planlæg og gennemse før generering
+## Plan and generate
 
-```powershell
-.\.local\venv\Scripts\python.exe danish_data/meld_bridge.py plan --meld-source .local/vendor/meld --arnis target/release/arnis.exe --job .local/meld-jobs/islands --bbox "54.9,10.8,56.15,15.2" --cell-regions 4 --max-cells 20000 --land-mask .local/data/land-mask-dk.json
+Use a separate Meld checkout as described in the [Meld guide](MELD.md).
+The example uses Windows; on Linux/macOS, omit `.exe` from the Arnis path.
+
+```sh
+python danish_data/meld_bridge.py plan --meld-source .local/vendor/meld --arnis target/release/arnis.exe --job .local/meld-jobs/islands --bbox "54.9,10.8,56.15,15.2" --cell-regions 4 --max-cells 20000 --land-mask .local/data/land-mask-dk.json
 ```
 
-Plan-kommandoen henter ingen bygnings-/terrændata og starter ikke generering.
-Den skriver antal bevarede og oversprungne felter samt en `plan.json`.
-Start først det store arbejde med den sædvanlige kommando:
+Planning reports retained and skipped cells and writes `plan.json`. It does
+not download building/terrain data or start generation. Review the selection
+before running:
 
-```powershell
-.\.local\venv\Scripts\python.exe danish_data/meld_bridge.py run --job .local/meld-jobs/islands --credentials-file .local/datafordeler.env
+```sh
+python danish_data/meld_bridge.py run --job .local/meld-jobs/islands --credentials-file .local/datafordeler.env
 ```
 
-## Regler og afgrænsninger
+**The example is not Denmark-only:** foreign land inside the bounding rectangle
+is retained too. Restrict the selection separately if national borders matter.
 
-- Standard `--coast-buffer-m 1000` bevarer en havstribe omkring land. Hele
-  felter og Arnis' overlap bevares, så den faktiske stribe kan være bredere.
-  Kun felter helt uden land inden for denne afstand kan springes over.
-- Der testes polygonoverlap for hele feltet inklusive datamargin, ikke blot
-  feltets midtpunkt. Små øer ved kanten og lavtliggende land beholdes.
-  Søer inde i landpolygoner behandles som land, så de heller ikke bliver void.
-- Manglende dækning betyder **bevar feltet**. Ugyldige filer stopper
-  planlægningen; fejl må ikke fortolkes som hav. Usikker geometri efter
-  projektion erstattes konservativt med dens fulde afgrænsning.
-- Masken angiver kystland, ikke broer eller havinstallationer. Brug gentagne
-  `--keep-bbox "syd,vest,nord,øst"` til områder, som altid skal genereres,
-  eksempelvis en lang bro eller en havvindmøllepark. De bevares også uden land.
-- Felter med kyst genereres fuldt ud. Kanten mod void følger derfor
-  delområder/chunks, ikke en glat linje præcis 1 km fra kysten.
-- Dette er et havfilter, ikke et filter for bestemte danske øer: svensk land
-  eller andre øer inden for dit valgte rektangel bevares også.
-- Udelad `--land-mask` for den tidligere adfærd, hvor hele rektanglet bygges.
-  Ved brug af masken gælder `--max-cells` efter havfiltrering; højst 200.000
-  kandidatfelter undersøges, og højst 20.000 felter må beholdes.
-- Genoptagelse springer både færdige felter og `skipped_ocean` over. Maskens
-  hash kontrolleres, så ændrede kystdata kræver en ny plan. Nye planer bruger
-  format 2, som gamle værktøjer afviser; det nye værktøj kan fortsat læse format 1.
-- Lav en ny plan for at ændre udvælgelsen. Tidligere genererede havområder
-  eller eksisterende verdener bliver ikke slettet af filteret. Serverplugins,
-  der bruger en anden verdensgenerator, kan ændre adfærden uden for kortet.
+## Selection rules
 
-## Kontrol den 9. oktober 2026
+- `--coast-buffer-m 1000` retains a coastal strip by default. Entire cells and
+  data margins are retained, so the actual strip may be wider. Only cells with
+  no land within this distance can be skipped.
+- The whole padded cell is checked against polygons, not just its centre.
+  Small islands at cell edges and low-lying land are retained. Lakes enclosed
+  by land polygons are treated as land for selection and do not become void.
+- Unknown mask coverage means **keep the cell**. Invalid files stop planning;
+  errors are not interpreted as ocean. Uncertain projected geometry uses a
+  conservative bounding envelope.
+- Coastal cells are generated in full. The edge against void follows cell and
+  chunk boundaries, not a smooth line exactly one kilometre offshore.
+- Land polygons do not describe bridges or offshore installations. Repeat
+  `--keep-bbox "south,west,north,east"` to retain areas such as long bridges or
+  offshore wind farms even where no land is mapped.
+- Omit `--land-mask` to generate the entire selected rectangle. With a mask,
+  `--max-cells` applies after ocean filtering. At most 200,000 candidate cells
+  are considered and at most 20,000 may be retained.
+- Resume skips both complete and `skipped_ocean` cells. The mask hash is checked;
+  changed coast data requires a new plan. New plans use schema 2, while the
+  runner also supports schema 1. Older runners reject schema 2.
+- Changing selection requires a new plan. Filtering does not delete previously
+  generated ocean or alter existing worlds. Server plugins with another world
+  generator may change behaviour beyond the generated map.
 
-En plan for bbox `54.9,10.8,56.15,15.2`, skala 1 og fire regioner pr. felt
-beholdt **5.161** felter og sprang **4.223** over ud af **9.384**.
-Det er cirka **45 % færre generatorjob**; tidsbesparelsen er ikke målt og
-følger ikke nødvendigvis samme procent, fordi landfelter er tungere end hav.
-Hele dette område er **ikke** genereret.
+## Validation and attribution
 
-Punktprøver bevarede Sjælland, Bornholm, Christiansø, Saltholm og lavtliggende
-land på Lolland; et punkt ude i Østersøen blev klassificeret som åbent hav.
-Automatiske tests dækker små øer ved feltkanter, kystbuffer, ukendt dækning,
-søer, forkerte projektioner, tvungent bevarede områder, ændret maske og
-genoptagelse uden datakald/generering for havfelter.
+Tests cover small edge islands, coastal buffers, unknown coverage, lakes,
+projections, explicitly retained areas, changed masks and resuming without
+downloads for skipped sea cells. Fewer cells do not imply the same percentage
+reduction in runtime: land cells are usually more expensive than sea cells.
 
-Kystdata: © OpenStreetMap-bidragsydere, [ODbL](https://osmdata.openstreetmap.de/info/license.html).
-Havfiltreringens nøjagtighed afhænger af kystdatasættets fuldstændighed og dato.
+Coast data: © OpenStreetMap contributors,
+[ODbL](https://osmdata.openstreetmap.de/info/license.html). Accuracy depends on
+the coastline dataset's completeness and date. Keep downloaded archives and
+prepared masks outside Git, for example under `.local/`.
