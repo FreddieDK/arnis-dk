@@ -70,6 +70,13 @@ pub struct Args {
     #[arg(long)]
     pub world_name: Option<String>,
 
+    /// Build height of a new One World. earth: extended height (Y -2032 to 2031)
+    /// with room for any place on Earth. vanilla: the normal Y -64 to 319 with sea
+    /// level at Y 63, for low-lying countries such as Denmark; Bedrock players
+    /// joining through Geyser can see it. A world keeps the height it was created with.
+    #[arg(long, value_enum, default_value_t = OneWorldHeight::Earth)]
+    pub one_world_height: OneWorldHeight,
+
     /// Set by `one_world::prepare`.
     #[arg(skip)]
     pub one_world_run: Option<crate::one_world::RunContext>,
@@ -598,6 +605,15 @@ impl FacadeMode {
     }
 }
 
+/// Build height a new One World is created with.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, clap::ValueEnum)]
+pub enum OneWorldHeight {
+    /// Extended height with room for any place on Earth.
+    Earth,
+    /// The normal build height, with sea level at Y 63.
+    Vanilla,
+}
+
 /// What a Java world generates past the area Arnis wrote.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, clap::ValueEnum)]
 pub enum WorldType {
@@ -727,8 +743,16 @@ pub fn validate_args(args: &Args) -> Result<(), String> {
         if args.mapillary_probe {
             return Err("--one-world and --mapillary-probe do not combine.".to_string());
         }
+        if args.one_world_height == OneWorldHeight::Vanilla && args.disable_height_limit {
+            return Err(
+                "--one-world-height vanilla keeps the normal build height; drop --disable-height-limit."
+                    .to_string(),
+            );
+        }
     } else if args.world_name.is_some() {
         return Err("--world-name only applies to --one-world.".to_string());
+    } else if args.one_world_height != OneWorldHeight::Earth {
+        return Err("--one-world-height only applies to --one-world.".to_string());
     }
     if args.projection == crate::projection::ProjectionKind::WebMercator && !args.one_world {
         println!(
@@ -1071,6 +1095,15 @@ mod tests {
         assert!(validate_args(&parse(&["--one-world", "--rotation", "15"])).is_err());
         assert!(validate_args(&parse(&["--one-world", "--body", "moon"])).is_err());
         assert!(validate_args(&parse(&["--world-name", "Home"])).is_err());
+
+        let vanilla = ["--one-world", "--one-world-height", "vanilla"];
+        assert!(validate_args(&parse(&vanilla)).is_ok());
+        assert!(validate_args(&parse(
+            &[&vanilla[..], &["--disable-height-limit"]].concat()
+        ))
+        .is_err());
+        assert!(validate_args(&parse(&["--one-world-height", "vanilla"])).is_err());
+        assert!(validate_args(&parse(&["--one-world-height", "earth"])).is_ok());
     }
 
     #[test]

@@ -859,8 +859,45 @@ impl SectionToModify {
         }
     }
 
+    /// Whether the section holds a block that `survival_safe` replaces. Read from the
+    /// palette where there is one; a dense section is a byte search per valuable.
+    fn holds_valuables(&self) -> bool {
+        let valuable = |block: Block| LOOK_ALIKES.iter().any(|&(v, _)| v == block);
+        match &self.storage {
+            BlockStorage::Uniform(block) => valuable(*block),
+            BlockStorage::Dense(ids) => LOOK_ALIKES
+                .iter()
+                .any(|(v, _)| u8::try_from(v.id()).is_ok_and(|id| ids.contains(&id))),
+            BlockStorage::Paletted(storage) => storage.palette.iter().any(|&b| valuable(b)),
+            BlockStorage::Direct(blocks) => blocks.iter().any(|&b| valuable(b)),
+        }
+    }
+
     /// Convert to Java Edition section format
     pub fn to_section(&self, y: i8) -> Section {
+        // Before any palette is built, so a look-alike already in the section is not listed twice.
+        if self.holds_valuables() {
+            let mut safe = Self {
+                storage: self.storage.clone(),
+                properties: self.properties.clone(),
+            };
+            for i in 0..SECTION_BLOCKS {
+                let block = safe.storage.get(i);
+                let look_alike = survival_safe(block);
+                if look_alike != block {
+                    safe.storage.set(i, look_alike);
+                    if !keeps_properties(block, look_alike) {
+                        safe.properties.remove(&i);
+                    }
+                }
+            }
+            // Not `to_section`: a section palette keeps the entries it no longer uses.
+            return safe.build_section(y);
+        }
+        self.build_section(y)
+    }
+
+    fn build_section(&self, y: i8) -> Section {
         let count = SECTION_COUNTERS_ON.load(std::sync::atomic::Ordering::Relaxed);
         if count {
             BUILT_SECTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -2286,6 +2323,134 @@ mod to_section_tests {
                 assert_eq!(got_idx, *want, "cell {i}, seed {seed}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod survival_safe_tests {
+    use super::*;
+
+    fn names(section: &Section) -> Vec<String> {
+        section
+            .block_states
+            .palette
+            .iter()
+            .map(|p| p.name.clone())
+            .collect()
+    }
+
+    fn assert_safe(section: &Section) {
+        let names = names(section);
+        for (valuable, _) in LOOK_ALIKES {
+            let name = format!("minecraft:{}", valuable.name());
+            assert!(!names.contains(&name), "{name} in {names:?}");
+        }
+        // Rails and beds share a name across ids, so an entry is its name and properties.
+        let entries: std::collections::HashSet<_> = section
+            .block_states
+            .palette
+            .iter()
+            .map(|p| format!("{} {:?}", p.name, p.properties))
+            .collect();
+        assert_eq!(
+            entries.len(),
+            names.len(),
+            "duplicate palette entries: {names:?}"
+        );
+    }
+
+    #[test]
+    fn valuable_blocks_are_saved_as_look_alikes_in_every_storage() {
+        // One byte per block: iron, netherite and redstone all have small ids.
+        let mut dense = SectionToModify::default();
+        for (i, block) in [IRON_BLOCK, NETHERITE_BLOCK, REDSTONE_BLOCK, STONE]
+            .into_iter()
+            .enumerate()
+        {
+            dense.set_block(i as u8, 0, 0, block);
+        }
+        assert!(matches!(dense.storage, BlockStorage::Dense(_)));
+        assert_safe(&dense.to_section(0));
+        // Generation still reads what it placed.
+        assert_eq!(dense.get_block(0, 0, 0), Some(IRON_BLOCK));
+
+        // A section palette, with the iron's look-alike already in it.
+        let mut paletted = SectionToModify::default();
+        for (i, block) in [
+            IRON_BLOCK,
+            WHITE_CONCRETE,
+            GOLD_BLOCK,
+            NETHERITE_BLOCK,
+            REDSTONE_BLOCK,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            paletted.set_block(i as u8, 0, 0, block);
+        }
+        assert!(matches!(paletted.storage, BlockStorage::Paletted(_)));
+        let section = paletted.to_section(0);
+        assert_safe(&section);
+        let palette = names(&section);
+        for look_alike in [
+            "white_concrete",
+            "yellow_concrete",
+            "gray_concrete",
+            "red_concrete",
+        ] {
+            assert!(
+                palette.contains(&format!("minecraft:{look_alike}")),
+                "{palette:?}"
+            );
+        }
+
+        // Stairs keep their properties, as do untouched blocks; an anvil's facing goes.
+        let facing = Arc::new(Value::String("facing=north".to_string()));
+        for (x, block) in [(7, OAK_STAIRS), (8, WAXED_CUT_COPPER_STAIRS), (9, ANVIL)] {
+            let i = SectionToModify::index(x, 0, 0);
+            paletted.storage.set(i, block);
+            paletted.properties.insert(i, Arc::clone(&facing));
+        }
+        let section = paletted.to_section(0);
+        assert_safe(&section);
+        let props = |name: &str| {
+            section
+                .block_states
+                .palette
+                .iter()
+                .filter(|p| p.name == format!("minecraft:{name}"))
+                .map(|p| p.properties.is_some())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(props("oak_stairs"), vec![true]);
+        assert_eq!(props("granite_stairs"), vec![true]);
+        assert!(
+            props("gray_concrete").iter().all(|has| !has),
+            "{:?}",
+            names(&section)
+        );
+
+        let mut solid = SectionToModify {
+            storage: BlockStorage::Uniform(IRON_BLOCK),
+            properties: FnvHashMap::default(),
+        };
+        assert_eq!(
+            names(&solid.to_section(0)),
+            vec!["minecraft:white_concrete"]
+        );
+
+        // More distinct blocks than a section palette indexes.
+        let wide: Vec<Block> = (0..u16::MAX)
+            .map(Block::from_raw_id)
+            .filter(|b| b.try_name().is_some() && survival_safe(*b) == *b)
+            .take(300)
+            .collect();
+        for i in 0..SECTION_BLOCKS {
+            solid.storage.set(i, wide[i % wide.len()]);
+        }
+        solid.storage.set(0, GOLD_BLOCK);
+        assert!(matches!(solid.storage, BlockStorage::Direct(_)));
+        assert_safe(&solid.to_section(0));
     }
 }
 

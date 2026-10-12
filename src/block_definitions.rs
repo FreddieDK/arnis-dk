@@ -1695,6 +1695,46 @@ pub fn get_stair_block_for_material(material: Block) -> Block {
     }
 }
 
+/// Arnis-DK: blocks worth too much on a survival server to give away in bulk
+/// (MinecraftDanmark's /sælg prices), each with the look-alike written in its place.
+/// Look-alikes are cheap blocks: concrete, terracotta, stone and non-flammable nether
+/// wood. Generation keeps using the originals internally; only the saved world changes.
+pub const LOOK_ALIKES: [(Block, Block); 18] = [
+    (IRON_BLOCK, WHITE_CONCRETE),
+    (GOLD_BLOCK, YELLOW_CONCRETE),
+    (NETHERITE_BLOCK, GRAY_CONCRETE),
+    (REDSTONE_BLOCK, RED_CONCRETE),
+    (COAL_BLOCK, BLACK_CONCRETE),
+    (ANVIL, GRAY_CONCRETE),
+    (DAMAGED_ANVIL, GRAY_CONCRETE),
+    (HOPPER, GRAY_CONCRETE),
+    (SPONGE, YELLOW_CONCRETE),
+    (WAXED_COPPER_BLOCK, TERRACOTTA),
+    (WAXED_EXPOSED_COPPER, LIGHT_GRAY_TERRACOTTA),
+    (WAXED_OXIDIZED_COPPER, STRIPPED_WARPED_HYPHAE),
+    (WAXED_EXPOSED_CHISELED_COPPER, LIGHT_GRAY_TERRACOTTA),
+    (WAXED_EXPOSED_CUT_COPPER, LIGHT_GRAY_TERRACOTTA),
+    (WAXED_EXPOSED_CUT_COPPER_SLAB, MUD_BRICK_SLAB),
+    (WAXED_CUT_COPPER_STAIRS, GRANITE_STAIRS),
+    (WAXED_EXPOSED_CUT_COPPER_STAIRS, POLISHED_GRANITE_STAIRS),
+    (WAXED_OXIDIZED_CUT_COPPER_STAIRS, WARPED_STAIRS),
+];
+
+pub fn survival_safe(block: Block) -> Block {
+    LOOK_ALIKES
+        .iter()
+        .find(|(valuable, _)| *valuable == block)
+        .map_or(block, |&(_, look_alike)| look_alike)
+}
+
+/// Whether a look-alike takes over the replaced block's properties: stairs from
+/// stairs and slabs from slabs. Every other look-alike is a plain full block.
+pub fn keeps_properties(valuable: Block, look_alike: Block) -> bool {
+    ["_stairs", "_slab"]
+        .iter()
+        .any(|shape| valuable.name().ends_with(shape) && look_alike.name().ends_with(shape))
+}
+
 /// Returns a matching slab block for the given wall material.
 /// Used for floor-level ledges and cornices in building depth features.
 pub fn get_slab_block_for_material(material: Block) -> Block {

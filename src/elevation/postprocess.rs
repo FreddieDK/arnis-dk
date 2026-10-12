@@ -2682,6 +2682,17 @@ impl ElevationAffine {
         });
         affine
     }
+
+    /// `scale` blocks per metre with sea level at `sea_level_y`, for a region
+    /// that fits the normal build height. Ground below `floor` is flattened there.
+    pub fn sea_level(scale: f64, sea_level_y: i32, floor: i32) -> Self {
+        Self {
+            min_height_m: f64::from(floor - sea_level_y) / scale,
+            blocks_per_meter: scale,
+            ground_level: floor,
+            soft_top: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -4030,6 +4041,27 @@ mod affine_policy_tests {
         let e = ElevationAffine::whole_earth(0.4, -2014, 2031);
         assert_eq!(e.soft_top, None);
         assert!(e.y_for_metres(8849.0) <= 2016.0);
+    }
+
+    #[test]
+    fn a_sea_level_mapping_puts_the_sea_at_its_y_and_flattens_below_the_floor() {
+        let e = ElevationAffine::sea_level(1.0, 63, -46);
+        assert_eq!(e.min_height_m, -109.0);
+        assert_eq!(e.y_for_metres(0.0), 63.0);
+        // Denmark's highest point and lowest land.
+        assert_eq!(e.y_for_metres(171.0), 234.0);
+        assert_eq!(e.y_for_metres(-7.0), 56.0);
+        let grid = vec![vec![-200.0, 0.0, 400.0]];
+        let (mc, _) =
+            scale_to_minecraft_with(&grid, 1.0, -62, -62, false, 2031, AffinePolicy::Fixed(e));
+        assert_eq!(
+            mc[0],
+            vec![-46.0, 63.0, (MAX_Y - TERRAIN_HEIGHT_BUFFER) as f64]
+        );
+
+        let half = ElevationAffine::sea_level(0.5, 63, -46);
+        assert_eq!(half.y_for_metres(0.0), 63.0);
+        assert_eq!(half.y_for_metres(100.0), 113.0);
     }
 
     #[test]

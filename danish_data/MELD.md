@@ -39,6 +39,8 @@ generating a world. Bounding boxes are **south, west, north, east** in WGS84.
   cover more geographic area per cell.
 - `--threads` controls Rust worker threads inside each cell.
 - `--caves` enables cave generation. `--signage full` is the default.
+- `--world-height vanilla` (default) uses the normal build height, Y -64 to 319,
+  with sea level at Y 63. `--world-height earth` uses the extended height instead.
 - `--max-cells` limits retained cells (default 1,000, maximum 20,000).
 - `--land-mask FILE` skips open-sea cells. See [ocean filtering](OCEAN.md).
 
@@ -62,10 +64,14 @@ unfinished work. A background service or automatic whole-cell retry scheduler
 is not included in this repository's CLI.
 
 The world is saved under the job's **`worlds/Arnis-DK Meld`** directory. Preserve
-the complete folder, including `data/`, `entities/` and `datapacks/`. One World
-uses extended build height (-2032 to 2031), requiring Minecraft Java 1.21.4+
-and the included datapack. Keep the world closed in Minecraft and on servers
-while generating.
+the complete folder, including `data/` and `entities/`. New jobs use the normal
+build height, so Bedrock players joining through Geyser can see the world and
+animals spawn as in an ordinary world. At scale 1 it holds Danish terrain with
+room for caves below sea level; land above about 240 m is flattened. Jobs planned
+before this option, and `--world-height earth`, use the extended build height
+(-2032 to 2031), which needs Minecraft Java 1.21.4+ and the included datapack and
+is out of Geyser's range. A job always keeps the height its world was created
+with. Keep the world closed in Minecraft and on servers while generating.
 
 ## Files, consistency and recovery
 

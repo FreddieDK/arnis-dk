@@ -1348,6 +1348,10 @@ fn block_entity_owned_by_block(chunk: &ChunkToModify, be: &Value) -> bool {
     let Some(block) = chunk.get_block((x & 15) as u8, *y, (z & 15) as u8) else {
         return false;
     };
+    // Saved as a look-alike that has no block entity, such as a hopper's.
+    if crate::block_definitions::survival_safe(block) != block {
+        return false;
+    }
     let name = block.name();
     match id.as_str() {
         "minecraft:banner" => name.ends_with("_banner"),
@@ -2049,6 +2053,36 @@ mod dimension_bounds_tests {
             get_entity_coords(&be),
             Some((7, 8, 9, EntityIdentity::Facing(-1)))
         );
+    }
+}
+
+#[cfg(test)]
+mod look_alike_block_entity_tests {
+    use super::*;
+    use crate::block_definitions::{CHEST, HOPPER};
+
+    fn be(id: &str, x: i32) -> Value {
+        Value::Compound(HashMap::from([
+            ("id".to_string(), Value::String(id.to_string())),
+            ("x".to_string(), Value::Int(x)),
+            ("y".to_string(), Value::Int(0)),
+            ("z".to_string(), Value::Int(0)),
+        ]))
+    }
+
+    #[test]
+    fn a_block_saved_as_a_look_alike_loses_its_block_entity() {
+        let mut chunk = ChunkToModify::default();
+        chunk.set_block(0, 0, 0, HOPPER);
+        chunk.set_block(1, 0, 0, CHEST);
+        assert!(!block_entity_owned_by_block(
+            &chunk,
+            &be("minecraft:hopper", 0)
+        ));
+        assert!(block_entity_owned_by_block(
+            &chunk,
+            &be("minecraft:chest", 1)
+        ));
     }
 }
 

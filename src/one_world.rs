@@ -5,7 +5,7 @@
 //! that frame and written into the existing region files, so areas generated
 //! at different times line up block for block.
 
-use crate::args::Args;
+use crate::args::{Args, OneWorldHeight};
 use crate::coordinate_system::cartesian::XZBBox;
 use crate::coordinate_system::geographic::LLBBox;
 use crate::elevation::ElevationAffine;
@@ -20,9 +20,13 @@ pub const PREVIEW_DIR: &str = "arnis_one_world/previews";
 pub const DEFAULT_WORLD_NAME: &str = "Arnis One World";
 /// 2: merges write into empty region files. Version 1 worlds still hold
 /// region template chunks outside their areas and are repaired once.
-/// 3: new worlds have the extended build height and a whole-Earth elevation
-/// mapping, which older builds would not apply.
+/// 3: new worlds store their elevation mapping when they are created (whole
+/// Earth on the extended build height, or sea level at Y 63 on the normal one),
+/// which older builds would not apply.
 pub const MANIFEST_VERSION: u32 = 3;
+
+/// Sea level of a One World with the normal build height, as in vanilla.
+pub const VANILLA_SEA_LEVEL_Y: i32 = 63;
 
 /// Geometry kept past the area edge, so an element straddling a seam is
 /// built whole on both sides.
@@ -119,9 +123,19 @@ impl Manifest {
             height_multiplier,
             // One section up, so water carved at the lowest level stays above the floor.
             elevation: args.terrain().then(|| {
+                let floor = crate::ground::min_ground_level_for(args) + 16;
+                if !args.disable_height_limit {
+                    let mut e = ElevationAffine::sea_level(
+                        scale * height_multiplier,
+                        VANILLA_SEA_LEVEL_Y,
+                        floor,
+                    );
+                    e.min_height_m = stable(e.min_height_m, 6);
+                    return e;
+                }
                 let mut e = ElevationAffine::whole_earth(
                     scale * height_multiplier,
-                    crate::ground::min_ground_level_for(args) + 16,
+                    floor,
                     crate::ground::extended_max_y_for(args),
                 );
                 if let Some(top) = e.soft_top.as_mut() {
@@ -426,12 +440,22 @@ fn resolve(
                 ));
             }
             *owned = true;
-            // Room for any place on Earth, so the first area does not limit later ones.
-            if !args.disable_height_limit {
-                println!(
-                    "Note: One World uses the extended build height, so any place on Earth fits."
-                );
-                args.disable_height_limit = true;
+            match args.one_world_height {
+                // Room for any place on Earth, so the first area does not limit later ones.
+                OneWorldHeight::Earth => {
+                    if !args.disable_height_limit {
+                        println!(
+                            "Note: One World uses the extended build height, so any place on Earth fits."
+                        );
+                        args.disable_height_limit = true;
+                    }
+                }
+                OneWorldHeight::Vanilla => {
+                    println!(
+                        "One World: normal build height (Y -64 to 319), sea level at Y {VANILLA_SEA_LEVEL_Y}."
+                    );
+                    args.disable_height_limit = false;
+                }
             }
             let origin_lat = (requested.min().lat() + requested.max().lat()) / 2.0;
             let origin_lon = (requested.min().lng() + requested.max().lng()) / 2.0;
@@ -775,6 +799,49 @@ mod tests {
         let mut args = args_for(MUNICH, &["--mode", "geo-only"]);
         drop(prepare(&flat, &req, &mut args).unwrap());
         assert_eq!(Manifest::load(&flat).unwrap().unwrap().elevation, None);
+    }
+
+    #[test]
+    fn a_vanilla_world_keeps_the_normal_height_with_sea_level_at_63() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = dir.path().join("w");
+        let req = LLBBox::from_str(MUNICH).unwrap();
+        let mut args = args_for(MUNICH, &["--one-world-height", "vanilla"]);
+        drop(prepare(&world, &req, &mut args).unwrap());
+        assert!(!args.disable_height_limit);
+        assert_eq!(crate::ground::extended_min_y_for(&args), -64);
+        assert_eq!(crate::ground::world_top_y_for(&args), 319);
+        let manifest = Manifest::load(&world).unwrap().unwrap();
+        assert_eq!(manifest.version, MANIFEST_VERSION);
+        assert!(!manifest.disable_height_limit);
+        let e = manifest.elevation.unwrap();
+        assert_eq!(e.y_for_metres(0.0), 63.0);
+        assert_eq!(e.y_for_metres(171.0), 234.0);
+        assert_eq!(e.ground_level, -46);
+        assert_eq!(args.one_world_run.as_ref().unwrap().elevation, Some(e));
+
+        // Later areas keep it, whatever height they ask for.
+        for extra in [&[][..], &["--disable-height-limit"][..]] {
+            let mut args = args_for(MUNICH, extra);
+            drop(prepare(&world, &req, &mut args).unwrap());
+            assert!(!args.disable_height_limit);
+            assert_eq!(args.one_world_run.unwrap().elevation, Some(e));
+        }
+
+        // And an extended world stays extended.
+        let tall = dir.path().join("tall");
+        drop(prepare(&tall, &req, &mut args_for(MUNICH, &[])).unwrap());
+        let mut args = args_for(MUNICH, &["--one-world-height", "vanilla"]);
+        drop(prepare(&tall, &req, &mut args).unwrap());
+        assert!(args.disable_height_limit);
+        assert_eq!(
+            args.one_world_run
+                .unwrap()
+                .elevation
+                .unwrap()
+                .y_for_metres(0.0),
+            -1584.0
+        );
     }
 
     #[test]

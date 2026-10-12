@@ -1747,6 +1747,7 @@ fn gui_start_generation(
                 world_time: world_time.clamp(0, 23999),
                 world_type: crate::args::WorldType::from_str_lossy(&world_type),
                 map_item,
+                one_world_height: crate::args::OneWorldHeight::Earth,
                 // Frontend refuses previews for rotated worlds, skip the work there.
                 map_preview: world_format != WorldFormat::LuantiWorld
                     && rotation_angle.abs() <= f64::EPSILON,

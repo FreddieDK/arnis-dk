@@ -48,6 +48,38 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(cmd[cmd.index('--world-type') + 1], 'void')
         self.assertNotIn('--master-origin-lat', cmd)
 
+    def test_new_plans_use_the_normal_height_and_older_plans_keep_their_world(self):
+        base = {'arnis': {'path': 'arnis.exe'}, 'world_name': 'Test', 'scale': 1,
+                'signage': 'full', 'caves': False}
+        cell = {'bbox': [55, 11, 55.01, 11.01]}
+        cmd = bridge.command({**base, 'world_height': 'vanilla'}, cell, Path('job'), Path('b.json'))
+        self.assertEqual(cmd[cmd.index('--one-world-height') + 1], 'vanilla')
+        for doc in (base, {**base, 'world_height': 'earth'}):
+            self.assertNotIn('--one-world-height', bridge.command(doc, cell, Path('job'), Path('b.json')))
+        with patch.object(bridge, 'external_meld', return_value=(None, {})):
+            for schema in (1, 2, bridge.SCHEMA):
+                bridge.verify_inputs({'schema': schema, 'meld_source': 'meld', 'meld_hashes': {}})
+            with self.assertRaisesRegex(ValueError, 'Unsupported'):
+                bridge.verify_inputs({'schema': bridge.SCHEMA + 1, 'meld_source': 'meld', 'meld_hashes': {}})
+
+    def test_plan_pins_the_normal_height_and_checks_the_binary_supports_it(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            binary = root / 'arnis'
+            binary.write_bytes(b'fake')
+            cells = [{'cell_key': '0', 'bbox': {'south': 55, 'west': 11, 'north': 55.005, 'east': 11.01}}]
+            grid = argparse.Namespace(cells_for_bbox=lambda *a, **kw: cells)
+            args = argparse.Namespace(scale=1, cell_regions=2, max_cells=1, threads=1,
+                                      job=root / 'job', bbox='55,11,55.005,11.01', meld_source=root,
+                                      arnis=binary, danish_buildings=None, osm_file=None, caves=False,
+                                      signage='full', land_mask=None, coast_buffer_m=2000, keep_bbox=[])
+            with patch.object(bridge, 'external_meld', return_value=(grid, {})), \
+                    patch.object(bridge, 'probe') as probe, patch('fetch.bounds'):
+                bridge.plan(args)
+            probe.assert_called_once_with(binary.resolve(), ['--one-world-height', 'vanilla'])
+            doc = bridge.read_json(args.job / 'plan.json')
+            self.assertEqual((doc['schema'], doc['world_height']), (bridge.SCHEMA, 'vanilla'))
+
     def test_resume_skips_completed_cells_and_retries_failed_cells(self):
         with tempfile.TemporaryDirectory() as name:
             job = Path(name)

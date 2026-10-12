@@ -13,7 +13,9 @@ import sys
 import tempfile
 import types
 
-SCHEMA = 2  # Older runners must not accidentally generate skipped_ocean cells.
+# 2: older runners must not generate skipped_ocean cells. 3: older runners
+# would ignore world_height and create the world with the extended height.
+SCHEMA = 3
 WORLD_NAME = 'Arnis-DK Meld'
 
 
@@ -74,10 +76,17 @@ def external_meld(path):
     return grid, hashes
 
 
-def probe(executable):
+def height_flags(document):
+    """Normal build height (Y -64 to 319, sea level at Y 63), which Bedrock players
+    joining through Geyser can see. Plans from before world_height keep their world's."""
+    return ['--one-world-height', 'vanilla'] if document.get('world_height') == 'vanilla' else []
+
+
+def probe(executable, extra=()):
     result = subprocess.run([str(executable), '--help'], capture_output=True, text=True,
                             encoding='utf-8', errors='replace', timeout=30, check=True)
     required = ['--one-world', '--world-name', '--danish-buildings', '--mode', '--signage', '--world-type']
+    required += [flag for flag in extra if flag.startswith('--')]
     missing = [flag for flag in required if flag not in result.stdout]
     if missing:
         raise ValueError('This binary is not a compatible Arnis-DK: ' + ', '.join(missing))
@@ -113,8 +122,11 @@ def plan(args):
         source = getattr(args, 'bridge_mask', None)
         bridge_document = read_json(source) if source else fetch_document(bounds)
         bridges = BridgeMask(bridge_document, bounds)
+    world_height = getattr(args, 'world_height', 'vanilla')
+    if world_height not in ('vanilla', 'earth'):
+        raise ValueError('World height must be vanilla or earth')
     grid, hashes = external_meld(args.meld_source)
-    probe(args.arnis.resolve())
+    probe(args.arnis.resolve(), height_flags({'world_height': world_height}))
     s, w, n, e = bounds
     origin = {'lat': s, 'lon': w}
     cells = grid.cells_for_bbox(dict(south=s, west=w, north=n, east=e), origin,
@@ -152,6 +164,7 @@ def plan(args):
                 'meld_source': str(args.meld_source.resolve()), 'meld_hashes': hashes,
                 'arnis': input_record(args.arnis), 'bbox': bounds, 'scale': args.scale,
                 'threads': args.threads, 'caves': args.caves, 'signage': args.signage,
+                'world_height': world_height,
                 'danish_buildings': supplement,
                 'land_mask': mask_record, 'coast_buffer_m': args.coast_buffer_m,
                 'keep_bbox': keep_areas,
@@ -183,7 +196,7 @@ def job_lock(job):
 
 
 def verify_inputs(document):
-    if document.get('schema') not in (1, SCHEMA):
+    if document.get('schema') not in (1, 2, SCHEMA):
         raise ValueError('Unsupported job format')
     _, hashes = external_meld(document['meld_source'])
     if hashes != document['meld_hashes']:
@@ -221,7 +234,7 @@ def command(document, cell, job, supplement):
            '--scale', str(document['scale']), '--mode', 'geo-terrain',
            '--world-type', 'void',
            '--signage', document['signage'], '--map-item=false',
-           '--danish-buildings', str(supplement)]
+           '--danish-buildings', str(supplement)] + height_flags(document)
     if document.get('osm_file'):
         cmd += ['--file', document['osm_file']['path']]
     if document['caves']:
@@ -259,7 +272,7 @@ def run(args):
     with job_lock(job):
         document = read_json(job / 'plan.json')
         verify_inputs(document)
-        probe(document['arnis']['path'])
+        probe(document['arnis']['path'], height_flags(document))
         allowed = {'pending', 'running', 'failed', 'complete', 'skipped_ocean'}
         if any(c['status'] not in allowed for c in document['cells']):
             raise ValueError('Unknown cell status in plan')
@@ -340,6 +353,9 @@ def main():
     p.add_argument('--keep-bbox', action='append', default=[], help='Always generate this south,west,north,east area, e.g. a bridge; repeatable')
     p.add_argument('--caves', action='store_true')
     p.add_argument('--signage', choices=['none', 'basic', 'full'], default='full')
+    p.add_argument('--world-height', choices=['vanilla', 'earth'], default='vanilla',
+                   help='vanilla: Y -64 to 319 with sea level at Y 63, visible to Bedrock players '
+                        'through Geyser (default); earth: the extended height (Y -2032 to 2031)')
     p.set_defaults(function=plan)
     p = commands.add_parser('run', help='Generate sequentially, resuming incomplete cells')
     p.add_argument('--job', type=Path, required=True)
