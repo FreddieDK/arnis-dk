@@ -566,6 +566,69 @@ impl Site<'_> {
     }
 }
 
+/// Sparse field vegetation: short grass, small flower drifts and occasional
+/// one-block-high shrubs. Each column is independent so tiled/overlapping passes
+/// agree, and a clump cannot spread over a road, water or another feature.
+pub(crate) fn place_farmland_detail(editor: &mut WorldEditor, x: i32, ground_y: i32, z: i32) {
+    if !editor.owns(x, z)
+        || editor.surface_is_sealed(x, z)
+        || editor.is_lc_water(x, z)
+        || !editor.check_for_block_absolute(x, ground_y, z, Some(&[GRASS_BLOCK]), None)
+        || editor.block_exists_absolute(x, ground_y + 1, z)
+        || editor.check_for_block_absolute(x, ground_y + 2, z, Some(WOOD), None)
+    {
+        return;
+    }
+    let cell_x = x.div_euclid(32);
+    let cell_z = z.div_euclid(32);
+    let lx = x.rem_euclid(32);
+    let lz = z.rem_euclid(32);
+    let patch = crate::land_cover::coord_hash(cell_x ^ 0xF13D, cell_z ^ 0x0810);
+    let shrub = crate::land_cover::coord_hash(cell_x ^ 0xB051, cell_z ^ 0x0811);
+    let h = crate::land_cover::coord_hash(x ^ 0xF13D, z ^ 0x0802);
+
+    // An occasional 2-3 block low shrub, not a tree or a continuous hedge wall.
+    let sx = 4 + ((shrub >> 8) % 24) as i32;
+    let sz = 4 + ((shrub >> 16) % 24) as i32;
+    let (along, across) = if shrub & 2 == 0 {
+        (lx - sx, lz - sz)
+    } else {
+        (lz - sz, lx - sx)
+    };
+    let plant = if shrub.is_multiple_of(2)
+        && across == 0
+        && (-1..=1).contains(&along)
+        && (along != -1 || shrub & 4 == 0)
+    {
+        if shrub.is_multiple_of(5) && along == 0 {
+            FLOWERING_AZALEA_LEAVES
+        } else {
+            AZALEA_LEAVES
+        }
+    } else {
+        let fx = 4 + ((patch >> 8) % 24) as i32;
+        let fz = 4 + ((patch >> 16) % 24) as i32;
+        let radius = 2 + ((patch >> 24) % 2) as i32;
+        let in_flowers = (lx - fx).pow(2) + (lz - fz).pow(2) <= radius * radius;
+        if patch.is_multiple_of(2) && in_flowers && !h.is_multiple_of(3) {
+            [
+                WHITE_FLOWER,
+                OXEYE_DAISY,
+                YELLOW_FLOWER,
+                CORNFLOWER,
+                RED_FLOWER,
+            ][((patch >> 32) % 5) as usize]
+        } else if crate::ground_generation::patch_noise(x, z, 5, 0xF13D_0801) < 0.16
+            && h.is_multiple_of(4)
+        {
+            GRASS
+        } else {
+            return;
+        }
+    };
+    editor.set_block_absolute(plant, x, ground_y + 1, z, None, None);
+}
+
 /// Lays plant patches over `[min_x..=max_x] x [min_z..=max_z]`, which the ground
 /// pass has just finished. Needs land cover; without it the ground stays as is.
 #[allow(clippy::too_many_arguments)]
@@ -1038,5 +1101,102 @@ mod tests {
         for upper in STACKED_PLANT_PARTS {
             assert!(LOOSE_PLANTS.contains(upper));
         }
+    }
+}
+
+#[cfg(test)]
+mod farmland_detail_tests {
+    use super::*;
+    use crate::element_processing::building_test_support::test_editor;
+
+    #[test]
+    fn field_flowers_and_shrubs_are_sparse_and_stable_across_tiles() {
+        let bbox = XZBBox::rect_from_min_max(-64, -64, 127, 127).unwrap();
+        let mut whole = test_editor(&bbox);
+        let mut tiled = test_editor(&bbox);
+        for x in -64..=127 {
+            for z in -64..=127 {
+                whole.set_block(GRASS_BLOCK, x, 0, z, None, None);
+                tiled.set_block(GRASS_BLOCK, x, 0, z, None, None);
+                place_farmland_detail(&mut whole, x, 0, z);
+            }
+        }
+        // Reversed tile order plus an overlapping second pass must not add density.
+        for (min_x, max_x) in [(64, 127), (0, 63), (-64, -1), (0, 127)] {
+            for x in min_x..=max_x {
+                for z in -64..=127 {
+                    place_farmland_detail(&mut tiled, x, 0, z);
+                }
+            }
+        }
+        let (mut grass, mut flowers, mut shrubs) = (0, 0, 0);
+        for x in -64..=127 {
+            for z in -64..=127 {
+                let block = whole.get_block_absolute(x, 1, z);
+                assert_eq!(
+                    block,
+                    tiled.get_block_absolute(x, 1, z),
+                    "tile mismatch at {x},{z}"
+                );
+                match block {
+                    Some(GRASS) => grass += 1,
+                    Some(YELLOW_FLOWER | WHITE_FLOWER | CORNFLOWER | OXEYE_DAISY | RED_FLOWER) => {
+                        flowers += 1
+                    }
+                    Some(AZALEA_LEAVES | FLOWERING_AZALEA_LEAVES) => shrubs += 1,
+                    None => {}
+                    other => panic!("unexpected field plant: {other:?}"),
+                }
+            }
+        }
+        let total = 192 * 192;
+        let plants = grass + flowers + shrubs;
+        assert!(
+            plants > total / 100 && plants < total * 8 / 100,
+            "density {plants}/{total}"
+        );
+        assert!(
+            flowers > 0 && flowers * 2 < grass,
+            "grass={grass}, flowers={flowers}"
+        );
+        assert!(
+            shrubs > 0 && shrubs < total / 200,
+            "too many shrubs: {shrubs}"
+        );
+        let mut adjacent_flowers = 0;
+        let mut adjacent_shrubs = 0;
+        let flowers = [
+            YELLOW_FLOWER,
+            WHITE_FLOWER,
+            CORNFLOWER,
+            OXEYE_DAISY,
+            RED_FLOWER,
+        ];
+        let leaves = [AZALEA_LEAVES, FLOWERING_AZALEA_LEAVES];
+        for x in -63..127 {
+            for z in -63..127 {
+                assert!(
+                    whole.get_block_absolute(x, 2, z).is_none(),
+                    "field plants stay low"
+                );
+                for (palette, count) in [
+                    (&flowers[..], &mut adjacent_flowers),
+                    (&leaves[..], &mut adjacent_shrubs),
+                ] {
+                    if whole.check_for_block_absolute(x, 1, z, Some(palette), None)
+                        && [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dz)| {
+                            whole.check_for_block_absolute(x + dx, 1, z + dz, Some(palette), None)
+                        })
+                    {
+                        *count += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            adjacent_flowers > 20 && adjacent_shrubs > 2,
+            "flowers and shrubs should form groups"
+        );
+        println!("Field sample: {grass} short grass, {} flowers, {shrubs} shrub blocks across {total} columns", plants-grass-shrubs);
     }
 }

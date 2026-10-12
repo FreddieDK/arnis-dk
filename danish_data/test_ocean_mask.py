@@ -96,7 +96,9 @@ class OceanTests(unittest.TestCase):
                 signage='full', land_mask=mask, coast_buffer_m=1000,
                 keep_bbox=['55.001,11.011,55.004,11.019'])
             with patch.object(bridge, 'external_meld', return_value=(grid, {})), \
-                    patch.object(bridge, 'probe'), patch('fetch.bounds') as bounds_check:
+                    patch.object(bridge, 'probe'), patch('fetch.bounds') as bounds_check, \
+                    patch('bridge_mask.fetch_document', return_value={
+                        'arnis_dk_bridge_coverage': [54,10,57,16], 'elements': []}):
                 bridge.plan(args)
                 self.assertEqual(bounds_check.call_count, 1)
             doc = bridge.read_json(args.job/'plan.json')
@@ -107,6 +109,41 @@ class OceanTests(unittest.TestCase):
             with patch.object(bridge, 'external_meld', return_value=(grid, {})):
                 with self.assertRaisesRegex(ValueError, 'land_mask changed'):
                     bridge.verify_inputs(doc)
+
+    def test_bridge_corridor_keeps_midspan_in_real_planner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            mask = root/'mask.json'
+            write_mask(mask)
+            binary = root/'arnis'
+            binary.write_bytes(b'fake')
+            cells = [{'cell_key': str(i), 'bbox': {'south': 55, 'west': 11+i*.14,
+                      'north': 55.005, 'east': 11+i*.14+.01}} for i in range(3)]
+            grid = argparse.Namespace(cells_for_bbox=lambda *a, **kw: cells)
+            snapshot = root/'bridges.json'
+            bridge.atomic_json(snapshot, {'arnis_dk_bridge_coverage': [54,10,57,16],
+                'elements': [{'id':1,'type':'way','tags':{'bridge':'yes','highway':'primary'},
+                'geometry':[{'lat':55.002,'lon':11.1},{'lat':55.002,'lon':11.2}]}]})
+            args = argparse.Namespace(scale=1,cell_regions=2,max_cells=1,threads=1,
+                job=root/'job',bbox='55,11,55.005,11.3',meld_source=root,
+                arnis=binary,danish_buildings=None,osm_file=None,caves=True,
+                signage='full',land_mask=mask,coast_buffer_m=2000,keep_bbox=[],bridge_mask=snapshot)
+            with patch.object(bridge,'external_meld',return_value=(grid,{})), \
+                    patch.object(bridge,'probe'),patch('fetch.bounds'):
+                bridge.plan(args)
+            doc=bridge.read_json(args.job/'plan.json')
+            self.assertEqual([c['status'] for c in doc['cells']],['skipped_ocean','pending','skipped_ocean'])
+            self.assertTrue(Path(doc['bridge_mask']['path']).is_file())
+            self.assertTrue(doc['caves'])
+
+    def test_two_kilometres_keeps_more_water_than_one(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'mask.json'
+            write_mask(path,[box(11,55,11.001,55.001)])
+            mask=LandMask(path)
+            sea=[55.015,11,55.016,11.001]
+            self.assertTrue(mask.is_open_sea(sea,1000))
+            self.assertFalse(mask.is_open_sea(sea,2000))
 
     def test_all_ocean_resume_needs_no_key_and_does_not_start_generation(self):
         with tempfile.TemporaryDirectory() as directory:

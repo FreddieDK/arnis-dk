@@ -17,10 +17,16 @@ integration focuses on buildings and addresses.
 - Adds missing building footprints and fills gaps in existing building data.
 - Improves entrance placement and adds full addresses on ordinary Minecraft signs.
 - Reduces generated trees in urban areas while preserving forest density.
+- Renders agricultural fields as grass with sparse short grass, small flower patches and occasional low shrubs, without generated crops, hay bales or irrigation dots; mapped roads, waterways and hedges remain.
 - Supports Arnis features such as terrain, caves and road signs.
+- Keeps coastal water and mapped bridges when skipping open sea: a 2,000-metre coastal buffer and 2,000 metres on each side of bridges.
+- Seals the finished Meld world’s underground void edge with two layers of bedrock, without walls between generated cells.
 
 Entrance positions depend on the source data. Facade points are placement hints,
 not surveyed door locations; exact doors and building heights are not guaranteed.
+
+Landscape changes apply to newly generated areas; existing worlds need regeneration
+to adopt them.
 
 ## Getting started
 

@@ -76,6 +76,24 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(bridge.read_json(job/'plan.json')['cells'][2]['status'], 'failed')
             self.assertFalse((job/'runner.lock').exists())
 
+    def test_final_edge_waits_for_last_cell(self):
+        with tempfile.TemporaryDirectory() as name:
+            job=Path(name)
+            doc={'schema':2,'arnis':{'path':'fake'},'world_name':'Test',
+                 'threads':1,'scale':1,'signage':'full','caves':True,
+                 'danish_buildings':{'path':'buildings.json'},'seal_void_edges':True,
+                 'cells':[{'id':str(i),'meld_cell':str(i),'bbox':[55,11,55.001,11.001],
+                           'status':'pending'} for i in range(2)]}
+            bridge.atomic_json(job/'plan.json',doc)
+            args=argparse.Namespace(job=job,limit=1,timeout=60,credentials_file=None)
+            with patch.object(bridge,'verify_inputs'),patch.object(bridge,'probe'), \
+                    patch.object(bridge,'validate_result'),patch.object(bridge,'world_coverage'), \
+                    patch.object(bridge,'finalize_edges') as finalize, \
+                    patch.object(bridge.subprocess,'run') as process:
+                process.return_value.returncode=0
+                bridge.run(args);finalize.assert_not_called()
+                bridge.run(args);finalize.assert_called_once()
+
     def test_result_requires_world_manifest_covering_cell(self):
         with tempfile.TemporaryDirectory() as name:
             world = Path(name)

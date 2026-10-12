@@ -30,7 +30,8 @@ pub fn generate_landuse(
 
     let block_type = match landuse_tag.as_str() {
         "greenfield" | "meadow" | "grass" | "orchard" | "forest" => GRASS_BLOCK,
-        "farmland" => FARMLAND,
+        // Arnis-DK fields are plain grass; keep their outlines, not crop noise.
+        "farmland" => GRASS_BLOCK,
         "cemetery" => PODZOL,
         "construction" => COARSE_DIRT,
         "traffic_island" => STONE_BLOCK_SLAB,
@@ -260,24 +261,9 @@ pub fn generate_landuse(
                     }
                 }
             }
-            "farmland" if !editor.check_for_block(x, 0, z, Some(&[WATER])) => {
-                // Irrigation dots, but only where boxed in so they can't flow downhill and wash out crops.
-                if x % 9 == 0 && z % 9 == 0 && editor.water_source_is_enclosed(x, z) {
-                    editor.set_block(WATER, x, 0, z, Some(&[FARMLAND]), None);
-                } else if rng.random_range(0..76) == 0 {
-                    let special_choice: i32 = rng.random_range(1..=10);
-                    if special_choice <= 4 {
-                        editor.set_block(HAY_BALE, x, 1, z, None, Some(&[SPONGE]));
-                    } else {
-                        place_bush(editor, x, z, BushKind::Low);
-                    }
-                } else {
-                    // Set crops only if the block below is farmland
-                    if editor.check_for_block(x, 0, z, Some(&[FARMLAND])) {
-                        let crop_choice = [WHEAT, CARROTS, POTATOES][rng.random_range(0..3)];
-                        editor.set_block(crop_choice, x, 1, z, None, None);
-                    }
-                }
+            "farmland" if !is_protected => {
+                let ground_y = editor.get_absolute_y(x, 0, z);
+                crate::ground_decoration::place_farmland_detail(editor, x, ground_y, z);
             }
             "grass" if editor.check_for_block(x, 0, z, Some(&[GRASS_BLOCK])) => {
                 match rng.random_range(0..200) {
@@ -402,11 +388,6 @@ pub fn generate_landuse(
         crate::structures::crane::maybe_place_crane(editor, floor_area.as_slice());
         crate::structures::excavator::scatter_excavators(editor, floor_area.as_slice());
         construction_site::furnish(editor, element, floor_area.as_slice(), building_footprints);
-    }
-
-    // Farmland fields rarely get a tractor.
-    if landuse_tag == "farmland" {
-        crate::structures::tractor::maybe_place_tractor(editor, floor_area.as_slice());
     }
 }
 
@@ -561,6 +542,133 @@ mod sealed_surface_tests {
     use crate::floodfill_cache::SealedSurfaceBitmap;
     use clap::Parser as _;
     use std::sync::Arc;
+
+    #[test]
+    fn farmland_stays_sparse_through_osm_ground_and_decoration_passes() {
+        use crate::ground::Ground;
+        use crate::land_cover::{LandCoverData, LC_CROPLAND};
+        // Test mapped fields and satellite-only fields through the real passes.
+        for mapped in [false, true] {
+            let bbox = XZBBox::rect_from_xz_lengths(48.0, 48.0).unwrap();
+            let mut editor = test_editor(&bbox);
+            let cover = LandCoverData {
+                grid: vec![vec![LC_CROPLAND; 2]; 2],
+                water_distance: vec![vec![0; 2]; 2],
+                water_blend_cache: once_cell::sync::OnceCell::with_value(vec![vec![0.0; 2]; 2]),
+                width: 2,
+                height: 2,
+                cells_per_meter: 1.0,
+            };
+            let ground = Arc::new(Ground::new_flat_land_cover_test(cover, 48, 48));
+            editor.set_ground(ground.clone());
+            let mut sealed = SealedSurfaceBitmap::new(&bbox);
+            for z in 0..48 {
+                sealed.set(20, z);
+                editor.set_block(DIRT_PATH, 20, 0, z, None, None);
+            }
+            editor.set_sealed_surface(Arc::new(sealed));
+            // An existing pond and mapped woody vegetation must survive.
+            editor.set_block(WATER, 25, 0, 25, None, None);
+            editor.set_block(OAK_LEAVES, 30, 1, 30, None, None);
+            editor.set_block(OAK_LOG, 32, 1, 32, None, None);
+            let outlines = BridgeOutlineIndex::build(&[]);
+            let structures = BridgeStructureMap::build(&[], &editor, &outlines, 1.0);
+            let bridges = BridgeSurfaceMap::build(&[], &structures, 1.0);
+            let args = Args::parse_from([
+                "arnis",
+                "--bbox",
+                "54.7,11.4,54.71,11.41",
+                "--ground-level",
+                "0",
+            ]);
+            let empty = BuildingFootprintBitmap::new_empty();
+            if mapped {
+                let field = rect_way(9, 2, 2, 45, 45, &[("landuse", "farmland")]);
+                generate_landuse(
+                    &mut editor,
+                    &field,
+                    &args,
+                    &FloodFillCache::new(),
+                    &empty,
+                    &RoadMaskBitmap::new_empty(),
+                    &bridges,
+                );
+            }
+            crate::ground_generation::generate_ground_region(
+                &mut editor,
+                &ground,
+                &args,
+                &bbox,
+                &empty,
+                &empty,
+                &bridges,
+                0,
+                47,
+                0,
+                47,
+                false,
+            );
+            crate::ground_decoration::decorate_region(
+                &mut editor,
+                &ground,
+                &args,
+                &bbox,
+                0,
+                47,
+                0,
+                47,
+            );
+            let mut plants = 0;
+            for x in 5..43 {
+                for z in 5..43 {
+                    let expected = if x == 20 {
+                        DIRT_PATH
+                    } else if (x, z) == (25, 25) {
+                        WATER
+                    } else {
+                        GRASS_BLOCK
+                    };
+                    assert!(
+                        editor.check_for_block(x, 0, z, Some(&[expected]))
+                            || ((x - 25).abs() <= 3 && (z - 25).abs() <= 3 && (x, z) != (25, 25)),
+                        "wrong surface at {x},{z}, mapped={mapped}: {:?}",
+                        editor.get_block_absolute(x, 0, z)
+                    );
+                    if (x, z) != (30, 30) && (x, z) != (32, 32) {
+                        if editor.block_exists_absolute(x, 1, z) {
+                            plants += 1;
+                            assert!(
+                                editor.check_for_block(
+                                    x,
+                                    1,
+                                    z,
+                                    Some(&[
+                                        GRASS,
+                                        YELLOW_FLOWER,
+                                        WHITE_FLOWER,
+                                        CORNFLOWER,
+                                        OXEYE_DAISY,
+                                        RED_FLOWER,
+                                        AZALEA_LEAVES,
+                                        FLOWERING_AZALEA_LEAVES
+                                    ])
+                                ),
+                                "unexpected field decoration at {x},{z}, mapped={mapped}"
+                            );
+                            assert!(editor.check_for_block(x, 0, z, Some(&[GRASS_BLOCK])));
+                            assert!(x != 20, "no plants on the path");
+                        }
+                    }
+                }
+            }
+            assert!(
+                plants > 0 && plants < 116,
+                "field must stay sparsely planted: {plants}"
+            );
+            assert!(editor.check_for_block(30, 1, 30, Some(&[OAK_LEAVES])));
+            assert!(editor.check_for_block(32, 1, 32, Some(&[OAK_LOG])));
+        }
+    }
 
     #[test]
     fn a_forest_leaves_a_dirt_track_alone() {

@@ -105,3 +105,7 @@ and generated-area coverage. File-level checks can verify chunks and map
 references, but cannot establish that every building or terrain seam looks
 correct. Inspect representative cells and boundaries in Minecraft before
 relying on a large generation. Complete nationwide output has not been validated.
+
+When `--land-mask` is used, planning also fetches and pins OSM bridge geometry.
+The default coastal buffer and bridge corridors both retain 2,000 metres of
+water, rounded out to whole cells. See [ocean selection](OCEAN.md).

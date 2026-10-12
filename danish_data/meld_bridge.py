@@ -106,6 +106,13 @@ def plan(args):
     if not math.isfinite(args.coast_buffer_m) or not 0 <= args.coast_buffer_m <= 10000:
         raise ValueError('Coast buffer must be between 0 and 10000 metres')
     keep_areas = [bbox(value) for value in args.keep_bbox]
+    bridge_document = None
+    bridges = None
+    if mask:
+        from bridge_mask import BridgeMask, fetch_document
+        source = getattr(args, 'bridge_mask', None)
+        bridge_document = read_json(source) if source else fetch_document(bounds)
+        bridges = BridgeMask(bridge_document, bounds)
     grid, hashes = external_meld(args.meld_source)
     probe(args.arnis.resolve())
     s, w, n, e = bounds
@@ -122,7 +129,9 @@ def plan(args):
         data_bbox = padded(area, args.scale)
         intersects_keep = any(area[0] <= k[2] and area[2] >= k[0] and area[1] <= k[3]
                               and area[3] >= k[1] for k in keep_areas)
-        ocean = bool(mask and not intersects_keep and mask.is_open_sea(data_bbox, args.coast_buffer_m))
+        bridge_corridor = bool(bridges and bridges.intersects(data_bbox))
+        ocean = bool(mask and not intersects_keep and not bridge_corridor
+                     and mask.is_open_sea(data_bbox, args.coast_buffer_m))
         if ocean:
             pass  # No Danish data request or coverage requirement for skipped sea cells.
         elif supplement:
@@ -147,11 +156,14 @@ def plan(args):
                 'land_mask': mask_record, 'coast_buffer_m': args.coast_buffer_m,
                 'keep_bbox': keep_areas,
                 'osm_file': input_record(args.osm_file) if args.osm_file else None,
-                'world_name': WORLD_NAME, 'cells': tasks}
+                'world_name': WORLD_NAME, 'cells': tasks, 'seal_void_edges': True}
     job.mkdir(parents=True)
+    if bridge_document is not None:
+        atomic_json(job / 'bridge-mask.json', bridge_document)
+        document['bridge_mask'] = input_record(job / 'bridge-mask.json')
     atomic_json(job / 'plan.json', document)
     print(f'Planned {kept} cells; skipped {len(tasks)-kept} open-sea cells (void).')
-    print('No data downloaded and no world generated.')
+    print('Bridge snapshot pinned when using a land mask; no world generated.')
     print(f'Run: python danish_data/meld_bridge.py run --job "{job}"')
 
 
@@ -176,7 +188,7 @@ def verify_inputs(document):
     _, hashes = external_meld(document['meld_source'])
     if hashes != document['meld_hashes']:
         raise ValueError('External Meld grid changed; use the original checkout to resume')
-    for key in ['arnis', 'danish_buildings', 'osm_file', 'land_mask']:
+    for key in ['arnis', 'danish_buildings', 'osm_file', 'land_mask', 'bridge_mask']:
         record = document.get(key)
         if record and digest(record['path']) != record['sha256']:
             raise ValueError(f'{key} changed since planning; create a new job')
@@ -253,12 +265,16 @@ def run(args):
             raise ValueError('Unknown cell status in plan')
         cells = [c for c in document['cells'] if c['status'] not in ('complete', 'skipped_ocean')]
         world = job / 'worlds' / document['world_name']
+        if cells and (job / 'void-edge-seal.json').exists():
+            from seal_void_edges import restore
+            restore(job)  # Never retain an old outer wall inside an extension.
         if any(c['status'] == 'complete' for c in document['cells']):
             coverage = world_coverage(world)
             for cell in document['cells']:
                 if cell['status'] == 'complete':
                     validate_result(world, cell, coverage)
         if not cells:
+            finalize_edges(document, job)
             print('No pending land/coastal cells; nothing generated (open sea stays void).')
             return
         key = None if document.get('danish_buildings') else load_key(args.credentials_file)
@@ -288,15 +304,26 @@ def run(args):
                 atomic_json(job / 'plan.json', document)
                 raise
             atomic_json(job / 'plan.json', document)
+        if all(c['status'] in ('complete', 'skipped_ocean') for c in document['cells']):
+            finalize_edges(document, job)
         skipped = sum(c['status'] == 'skipped_ocean' for c in document['cells'])
         print(f"Complete: {sum(c['status'] == 'complete' for c in document['cells'])}/{len(document['cells'])-skipped}; skipped ocean: {skipped}")
         print(f'World: {world}')
 
 
+def finalize_edges(document, job):
+    # Request files let an already running cloud job opt in without racing the
+    # worker's atomic plan updates. Only seal the complete, combined footprint.
+    requested = document.get('seal_void_edges') or (job / 'seal-void-edges.request').exists()
+    if requested and any(c['status'] == 'complete' for c in document['cells']):
+        from seal_void_edges import seal
+        seal(job)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='action', required=True)
-    p = commands.add_parser('plan', help='Plan using an external Meld checkout; no generation')
+    p = commands.add_parser('plan', help='Plan using Meld; fetch bridge corridors but do not generate a world')
     p.add_argument('--meld-source', type=Path, required=True)
     p.add_argument('--arnis', type=Path, required=True)
     p.add_argument('--job', type=Path, required=True)
@@ -308,7 +335,8 @@ def main():
     p.add_argument('--danish-buildings', type=Path, help='Optional prepared supplement covering all padded cells')
     p.add_argument('--osm-file', type=Path, help='Optional OSM JSON covering all padded cells; otherwise use Arnis download')
     p.add_argument('--land-mask', type=Path, help='Prepared ocean_mask.py file; skip open-sea cells as void')
-    p.add_argument('--coast-buffer-m', type=float, default=1000, help='Retain a coastal sea strip (default 1000 metres, plus cell padding)')
+    p.add_argument('--coast-buffer-m', type=float, default=2000, help='Retain a coastal sea strip (default 2000 metres, plus cell padding)')
+    p.add_argument('--bridge-mask', type=Path, help='Prepared bridge snapshot; otherwise fetch OSM bridge corridors when a land mask is used')
     p.add_argument('--keep-bbox', action='append', default=[], help='Always generate this south,west,north,east area, e.g. a bridge; repeatable')
     p.add_argument('--caves', action='store_true')
     p.add_argument('--signage', choices=['none', 'basic', 'full'], default='full')

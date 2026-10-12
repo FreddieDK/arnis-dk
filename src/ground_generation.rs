@@ -6,7 +6,7 @@
 //! - Selects surface and sub-surface blocks based on ESA WorldCover land cover
 //!   classification and terrain slope.
 //! - Blends shorelines between water and land.
-//! - Places vegetation (grass, flowers, trees, crops) according to land cover class.
+//! - Places vegetation (grass, flowers, trees) according to land cover class.
 //! - Cleans up stray vegetation from road surfaces.
 //! - Fills underground columns with stone and places a bedrock floor.
 //!
@@ -15,12 +15,11 @@
 
 use crate::args::Args;
 use crate::block_definitions::{
-    AIR, BEDROCK, BLACK_CONCRETE, BRICK, CARROTS, CLAY, COARSE_DIRT, COBBLESTONE,
-    CRACKED_STONE_BRICKS, CYAN_TERRACOTTA, DEAD_BUSH, DIRT, DIRT_PATH, FARMLAND, FERN, GRASS,
-    GRASS_BLOCK, GRAVEL, GRAY_CONCRETE, GRAY_CONCRETE_POWDER, HAY_BALE, LIGHT_GRAY_CONCRETE,
-    MOSS_BLOCK, MUD, OAK_PLANKS, PACKED_ICE, PODZOL, POTATOES, SAND, SANDSTONE, SMOOTH_STONE,
-    SNOW_BLOCK, STONE, STONE_BRICKS, TALL_GRASS_BOTTOM, TALL_GRASS_TOP, WATER, WHEAT,
-    WHITE_CONCRETE, YELLOW_CONCRETE,
+    AIR, BEDROCK, BLACK_CONCRETE, BRICK, CLAY, COARSE_DIRT, COBBLESTONE, CRACKED_STONE_BRICKS,
+    CYAN_TERRACOTTA, DEAD_BUSH, DIRT, DIRT_PATH, FARMLAND, FERN, GRASS, GRASS_BLOCK, GRAVEL,
+    GRAY_CONCRETE, GRAY_CONCRETE_POWDER, LIGHT_GRAY_CONCRETE, MOSS_BLOCK, MUD, OAK_PLANKS,
+    PACKED_ICE, PODZOL, SAND, SANDSTONE, SMOOTH_STONE, SNOW_BLOCK, STONE, STONE_BRICKS,
+    TALL_GRASS_BOTTOM, TALL_GRASS_TOP, WATER, WHITE_CONCRETE, YELLOW_CONCRETE,
 };
 use crate::coordinate_system::cartesian::{XZBBox, XZPoint};
 use crate::element_processing::bridges::BridgeSurfaceMap;
@@ -702,7 +701,9 @@ pub fn generate_ground_region(
                                             }
                                         }
                                         land_cover::LC_GRASSLAND => (GRASS_BLOCK, DIRT),
-                                        land_cover::LC_CROPLAND => (FARMLAND, DIRT),
+                                        // Match OSM farmland: plain grass, with the cropland class
+                                        // retained so meadow/grassland decoration is not applied.
+                                        land_cover::LC_CROPLAND => (GRASS_BLOCK, DIRT),
                                         land_cover::LC_BUILT_UP => {
                                             let h = land_cover::coord_hash(x, z) % 100;
                                             if h < 72 {
@@ -1195,51 +1196,10 @@ pub fn generate_ground_region(
                                             );
                                         }
                                     }
-                                    land_cover::LC_CROPLAND
-                                        if editor.check_for_block_absolute(
-                                            x,
-                                            ground_y,
-                                            z,
-                                            Some(&[FARMLAND]),
-                                            None,
-                                        ) =>
-                                    {
-                                        // Irrigation dots, but only where boxed in so they can't flow downhill and wash out crops.
-                                        if x % 9 == 0
-                                            && z % 9 == 0
-                                            && editor.water_source_is_enclosed(x, z)
-                                        {
-                                            editor.set_block_absolute(
-                                                WATER,
-                                                x,
-                                                ground_y,
-                                                z,
-                                                Some(&[FARMLAND]),
-                                                None,
-                                            );
-                                        } else if rng.random_range(0..76) == 0 {
-                                            if rng.random_range(1..=10) <= 4 {
-                                                editor.set_block_absolute(
-                                                    HAY_BALE,
-                                                    x,
-                                                    ground_y + 1,
-                                                    z,
-                                                    None,
-                                                    None,
-                                                );
-                                            }
-                                        } else {
-                                            let crop =
-                                                [WHEAT, CARROTS, POTATOES][rng.random_range(0..3)];
-                                            editor.set_block_absolute(
-                                                crop,
-                                                x,
-                                                ground_y + 1,
-                                                z,
-                                                None,
-                                                None,
-                                            );
-                                        }
+                                    land_cover::LC_CROPLAND => {
+                                        crate::ground_decoration::place_farmland_detail(
+                                            editor, x, ground_y, z,
+                                        );
                                     }
                                     land_cover::LC_WETLAND | land_cover::LC_MANGROVES
                                         if ground_is_natural =>
