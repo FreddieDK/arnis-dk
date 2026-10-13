@@ -10,13 +10,15 @@ integration focuses on buildings and addresses.
 
 | Data source | Used for |
 | --- | --- |
-| **GeoDanmark** | Building footprints, including courtyards and complex outlines |
+| **GeoDanmark** | Building footprints, including courtyards and complex outlines; hedges and scrub |
 | **BBR** | Building use, floor counts, wall and roof materials |
 | **DAR** | Addresses and qualified entrance or facade positions |
+| **Danish height model** | Telling living hedges apart from fences |
 
 - Adds missing building footprints and fills gaps in existing building data.
 - Improves entrance placement and adds full addresses on ordinary Minecraft signs.
 - Reduces generated trees in urban areas while preserving forest density.
+- Grows real garden hedges and scrub where GeoDanmark and the height model show them: never inside buildings or on paving, each hedge in a one-block strip of lawn.
 - Renders agricultural fields as grass with sparse short grass, small flower patches and occasional low shrubs, without generated crops, hay bales or irrigation dots; mapped roads, waterways and hedges remain.
 - Keeps worlds fair for [survival servers](#survival-servers): no valuable blocks, vanilla ore amounts and the normal build height for Geyser players.
 - Supports Arnis features such as terrain, caves and road signs.
@@ -32,7 +34,8 @@ to adopt them.
 ## Getting started
 
 You need Rust and Python 3.12+. Live Danish data downloads require your own
-Datafordeler API key; downloaded register extracts can also be imported.
+Datafordeler API key; downloaded register extracts can also be imported. An
+optional Dataforsyningen token lets the hedge check use the Danish height model.
 
 1. Install the Python dependencies from `danish_data/requirements.txt`.
 2. Use `danish_data/fetch.py` to prepare a building supplement for your area,

@@ -4,6 +4,7 @@ use crate::element_processing::bridges::BridgeSurfaceMap;
 use crate::element_processing::connected_blocks::{
     four_connected_line, is_connectable, place_connected,
 };
+use crate::floodfill_cache::CoordinateBitmap;
 use crate::osm_parser::{ProcessedElement, ProcessedNode};
 use crate::world_editor::WorldEditor;
 
@@ -13,6 +14,7 @@ pub fn generate_barriers(
     editor: &mut WorldEditor,
     element: &ProcessedElement,
     bridge_surface: &BridgeSurfaceMap,
+    building_footprints: &CoordinateBitmap,
 ) {
     // Default values
     let mut barrier_material: Block = COBBLESTONE_WALL;
@@ -114,16 +116,22 @@ pub fn generate_barriers(
         }
 
         let bases = barrier_bases(editor, bridge_surface, &cells);
+        let mut rooted: Vec<(i32, i32)> = Vec::new();
         for (&(bx, bz), base) in cells.iter().zip(bases) {
             let Some(base) = base else {
                 continue;
             };
+            // A hedge grows in the garden: never inside a building or on paving.
+            if hedge && (building_footprints.contains(bx, bz) || editor.surface_is_sealed(bx, bz)) {
+                continue;
+            }
             // Hedges stand on soil, not on the paving beside the lawn they edge.
             if hedge
                 && !editor.surface_is_sealed(bx, bz)
                 && base == editor.get_absolute_y(bx, 0, bz)
             {
                 editor.set_block_absolute(GRASS_BLOCK, bx, base, bz, None, None);
+                rooted.push((bx, bz));
             }
             for y in 1..=wall_height {
                 if joined {
@@ -141,6 +149,21 @@ pub fn generate_barriers(
                     None,
                     None,
                 );
+            }
+        }
+        // A hedge stands in a strip of lawn one block wide, not on the bare stone
+        // around it. The ground is laid after the elements and only where nothing
+        // is yet, so this grass stays; buildings, roads and paving are left alone.
+        for &(bx, bz) in &rooted {
+            for dx in -1..=1 {
+                for dz in -1..=1 {
+                    let (x, z) = (bx + dx, bz + dz);
+                    if building_footprints.contains(x, z) || editor.surface_is_sealed(x, z) {
+                        continue;
+                    }
+                    let ground = editor.get_absolute_y(x, 0, z);
+                    editor.set_block_absolute(GRASS_BLOCK, x, ground, z, None, None);
+                }
             }
         }
     }
@@ -321,14 +344,30 @@ mod tests {
             ProcessedElement::Way(way(id, &[("barrier", "wall")], points))
         };
         // Along the deck: on the deck.
-        generate_barriers(&mut editor, &fence(2, &[(12, 40), (68, 40)]), &surface);
+        let none = CoordinateBitmap::new_empty();
+        generate_barriers(
+            &mut editor,
+            &fence(2, &[(12, 40), (68, 40)]),
+            &surface,
+            &none,
+        );
         assert!(editor.block_exists_absolute(40, deck_y + 1, 40));
         assert!(!editor.block_exists_absolute(40, 1, 40));
         // Passing underneath: on the ground.
-        generate_barriers(&mut editor, &fence(3, &[(35, 10), (35, 70)]), &surface);
+        generate_barriers(
+            &mut editor,
+            &fence(3, &[(35, 10), (35, 70)]),
+            &surface,
+            &none,
+        );
         assert!(editor.block_exists_absolute(35, 1, 40));
         // Off the deck edge mid-span: not hanging beside it.
-        generate_barriers(&mut editor, &fence(4, &[(12, 44), (68, 44)]), &surface);
+        generate_barriers(
+            &mut editor,
+            &fence(4, &[(12, 44), (68, 44)]),
+            &surface,
+            &none,
+        );
         assert!(!editor.block_exists_absolute(40, deck_y + 1, 44));
     }
 
@@ -339,7 +378,7 @@ mod tests {
         let structures = BridgeStructureMap::build(&[], &editor, &outlines, 1.0);
         let surface = BridgeSurfaceMap::build(&[], &structures, 1.0);
         let way = ProcessedElement::Way(rect_way(1, 5, 5, 30, 30, tags));
-        generate_barriers(&mut editor, &way, &surface);
+        generate_barriers(&mut editor, &way, &surface, &CoordinateBitmap::new_empty());
         read(&editor)
     }
 
@@ -353,6 +392,41 @@ mod tests {
         draw(tags, |editor| {
             editor.check_for_block(15, 0, 5, Some(&[GRASS_BLOCK]))
         })
+    }
+
+    #[test]
+    fn hedges_stay_out_of_buildings_and_off_paving() {
+        let xzbbox = XZBBox::rect_from_xz_lengths(40.0, 40.0).unwrap();
+        let mut editor = test_editor(&xzbbox);
+        let mut sealed = crate::floodfill_cache::SealedSurfaceBitmap::new(&xzbbox);
+        for z in 0..40 {
+            sealed.set(20, z);
+        }
+        editor.set_sealed_surface(std::sync::Arc::new(sealed));
+        let mut buildings = CoordinateBitmap::new(&xzbbox);
+        for x in 25..=30 {
+            for z in 0..40 {
+                buildings.set(x, z);
+            }
+        }
+        let outlines = BridgeOutlineIndex::build(&[]);
+        let structures = BridgeStructureMap::build(&[], &editor, &outlines, 1.0);
+        let surface = BridgeSurfaceMap::build(&[], &structures, 1.0);
+        let hedge = ProcessedElement::Way(way(1, &[("barrier", "hedge")], &[(5, 10), (35, 10)]));
+        generate_barriers(&mut editor, &hedge, &surface, &buildings);
+        let leaves = |x| editor.check_for_block(x, 1, 10, Some(&[OAK_LEAVES]));
+        assert!(leaves(10) && leaves(33), "the hedge grows in the gardens");
+        assert!(!leaves(20), "not on the path");
+        assert!(!leaves(27), "not inside the house");
+        let lawn = |x, z| editor.check_for_block(x, 0, z, Some(&[GRASS_BLOCK]));
+        // A one-block lawn all round, corners included.
+        for (x, z) in [(10, 9), (10, 11), (4, 9), (4, 11), (36, 10)] {
+            assert!(lawn(x, z), "lawn at {x},{z}");
+        }
+        assert!(!lawn(10, 8) && !lawn(10, 12), "only one block wide");
+        assert!(!lawn(20, 9) && !lawn(20, 11), "not on the path");
+        assert!(!lawn(25, 9) && !lawn(26, 11), "not inside the house");
+        assert!(lawn(24, 9), "right up to the wall outside");
     }
 
     #[test]

@@ -15,7 +15,8 @@ import types
 
 # 2: older runners must not generate skipped_ocean cells. 3: older runners
 # would ignore world_height and create the world with the extended height.
-SCHEMA = 3
+# 4: older runners would leave out the hedges.
+SCHEMA = 4
 WORLD_NAME = 'Arnis-DK Meld'
 
 
@@ -165,6 +166,7 @@ def plan(args):
                 'arnis': input_record(args.arnis), 'bbox': bounds, 'scale': args.scale,
                 'threads': args.threads, 'caves': args.caves, 'signage': args.signage,
                 'world_height': world_height,
+                'hedges': bool(getattr(args, 'hedges', True)) and supplement is None,
                 'danish_buildings': supplement,
                 'land_mask': mask_record, 'coast_buffer_m': args.coast_buffer_m,
                 'keep_bbox': keep_areas,
@@ -196,7 +198,7 @@ def job_lock(job):
 
 
 def verify_inputs(document):
-    if document.get('schema') not in (1, 2, SCHEMA):
+    if document.get('schema') not in (1, 2, 3, SCHEMA):
         raise ValueError('Unsupported job format')
     _, hashes = external_meld(document['meld_source'])
     if hashes != document['meld_hashes']:
@@ -207,7 +209,7 @@ def verify_inputs(document):
             raise ValueError(f'{key} changed since planning; create a new job')
 
 
-def supplement_for_cell(document, cell, folder, key):
+def supplement_for_cell(document, cell, folder, key, token=None):
     if document.get('danish_buildings'):
         return Path(document['danish_buildings']['path'])
     from fetch import fetch
@@ -216,15 +218,20 @@ def supplement_for_cell(document, cell, folder, key):
     if output.exists():
         existing = read_json(output)
         if (existing['arnis_dk']['bbox'] != cell['data_bbox']
-                or existing['arnis_dk']['at'] != document['snapshot']):
-            raise ValueError('Cached Danish supplement has a different area or snapshot')
+                or existing['arnis_dk']['at'] != document['snapshot']
+                or bool(document.get('hedges')) != ('hedges' in existing['arnis_dk'])):
+            raise ValueError('Cached Danish supplement has a different area, snapshot or hedges')
         return output
     outlines, bbr, dar, at = fetch(cell['data_bbox'], key,
                                   at=datetime.fromisoformat(document['snapshot']))
     paths = [folder / name for name in ['GeoDanmark.json', 'BBR.json', 'DAR.json']]
     for path, rows in zip(paths, [outlines, bbr, dar]):
         atomic_json(path, rows)
-    atomic_json(output, prepare(*paths, bbox=cell['data_bbox'], at=at))
+    supplement = prepare(*paths, bbox=cell['data_bbox'], at=at)
+    if document.get('hedges'):
+        from hedges import add
+        add(supplement, cell['data_bbox'], outlines, key, at, token)
+    atomic_json(output, supplement)
     return output
 
 
@@ -291,9 +298,16 @@ def run(args):
             print('No pending land/coastal cells; nothing generated (open sea stays void).')
             return
         key = None if document.get('danish_buildings') else load_key(args.credentials_file)
+        token = None
+        if document.get('hedges'):
+            from hedges import load_token
+            token = load_token(args.credentials_file)
+            if not token:
+                raise ValueError('This plan grows real hedges, which need DATAFORSYNINGEN_TOKEN '
+                                 'for the Danish height model; add it to the credentials file')
         env = os.environ.copy()
         # Credentials are only consumed by Python, never passed to the generator.
-        for name in ['DATAFORDELER_API_KEY', 'ARNIS_DK_BUILDINGS', 'MAPILLARY_TOKEN']:
+        for name in ['DATAFORDELER_API_KEY', 'DATAFORSYNINGEN_TOKEN', 'ARNIS_DK_BUILDINGS', 'MAPILLARY_TOKEN']:
             env.pop(name, None)
         env['RAYON_NUM_THREADS'] = str(document['threads'])
         for cell in cells[:args.limit]:
@@ -303,7 +317,7 @@ def run(args):
             atomic_json(job / 'plan.json', document)
             print(f"Generating cell {cell['id']} ({cell['meld_cell']})", flush=True)
             try:
-                supplement = supplement_for_cell(document, cell, folder, key)
+                supplement = supplement_for_cell(document, cell, folder, key, token)
                 with (folder / 'arnis.log').open('w', encoding='utf-8') as log:
                     result = subprocess.run(command(document, cell, job, supplement), env=env,
                                             stdout=log, stderr=subprocess.STDOUT, timeout=args.timeout,
@@ -353,6 +367,9 @@ def main():
     p.add_argument('--keep-bbox', action='append', default=[], help='Always generate this south,west,north,east area, e.g. a bridge; repeatable')
     p.add_argument('--caves', action='store_true')
     p.add_argument('--signage', choices=['none', 'basic', 'full'], default='full')
+    p.add_argument('--hedges', action=argparse.BooleanOptionalAction, default=True,
+                   help='Grow GeoDanmark hedges and scrub that the height model confirms (default); '
+                        'needs DATAFORSYNINGEN_TOKEN when running')
     p.add_argument('--world-height', choices=['vanilla', 'earth'], default='vanilla',
                    help='vanilla: Y -64 to 319 with sea level at Y 63, visible to Bedrock players '
                         'through Geyser (default); earth: the extended height (Y -2032 to 2031)')

@@ -393,7 +393,7 @@ fn process_element(
                     bridge_surface,
                 );
             } else if way.tags.contains_key("barrier") {
-                barriers::generate_barriers(editor, element, bridge_surface);
+                barriers::generate_barriers(editor, element, bridge_surface, building_footprints);
             } else if let Some(val) = way.tags.get("waterway") {
                 if val == "dock" || val == "riverbank" {
                     // docks and (legacy) riverbank areas count as water areas

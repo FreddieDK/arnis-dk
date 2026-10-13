@@ -1,7 +1,8 @@
 # Danish building data
 
 Arnis-DK combines GeoDanmark building footprints, BBR building properties and
-DAR addresses. Terrain and coast rendering are handled by Arnis/Mapterhorn.
+DAR addresses, and adds GeoDanmark's hedges and scrub where the Danish height
+model confirms them. Terrain and coast rendering are handled by Arnis/Mapterhorn.
 
 ## Setup
 
@@ -35,7 +36,9 @@ cargo build --release --locked --no-default-features
 
 Create an IT system and API key in Datafordeler Administration. Save the key
 in `.local/datafordeler.env` as `DATAFORDELER_API_KEY=your-key`, or set the
-`DATAFORDELER_API_KEY` environment variable. Keep keys and downloads under
+`DATAFORDELER_API_KEY` environment variable. For hedges, add a free
+Dataforsyningen token to the same file as `DATAFORSYNINGEN_TOKEN=your-token`
+(see [hedges and scrub](#hedges-and-scrub)). Keep keys and downloads under
 the Git-ignored `.local/` directory.
 
 Bounding boxes use WGS84 coordinates in **south, west, north, east** order.
@@ -159,6 +162,29 @@ including forests inside urban areas; polygon holes are not treated as forest.
 Natural-ground requirements still apply. Unmapped woodland near buildings can
 still be thinned. Existing worlds are not modified automatically.
 
+## Hedges and scrub
+
+GeoDanmark maps hedges, fences and walls as `Hegn` lines, and scrub as
+`KratBevoksning` areas. Most `Hegn` lines have no type (`Ikke tildelt`). Lines
+typed `Levende` are hedges, and other types such as wire fences are skipped. An
+untyped line becomes a hedge only where the Danish height model shows growth
+along it: at least half of a 1.2 m band must stand more than 0.7 m above the
+terrain. On Slagelse villa streets this kept about 55% of the untyped lines and
+dropped plank and wire fences. Without a token, only lines typed `Levende` are
+added.
+
+Hedge lines and scrub areas are cut back 1 m from GeoDanmark buildings. In
+Minecraft a hedge is two blocks of non-decaying oak leaves on grass, with a
+one-block strip of lawn around it. It is never placed inside a building
+footprint or on a road, path or other sealed surface, and it never replaces
+blocks that are already there. OSM `barrier=hedge` ways follow the same rules.
+Scrub areas get scattered bushes on grass.
+
+`fetch.py` adds hedges by default; `--no-hedges` leaves them out. The height
+model is downloaded only around untyped lines, in 800 m tiles at 0.8 m
+resolution. Dropped requests are retried, and a lasting failure names its HTTP
+status or timeout.
+
 ## API and implementation details
 
 | Register | GraphQL endpoint | Data |
@@ -166,6 +192,7 @@ still be thinned. Existing worlds are not modified automatically.
 | GeoDanmark | `https://graphql.datafordeler.dk/GEODKV/v2` | Footprints, IDs, BBR links, status and geometry metadata |
 | BBR | `https://graphql.datafordeler.dk/BBR/v2` | Building use, floor counts, materials, construction year and house-number links |
 | DAR | `https://graphql.datafordeler.dk/DAR/v2` | House numbers, full access addresses, building links and access points |
+| Danish height model | `https://api.dataforsyningen.dk/dhm_wcs_DAF` (WCS, token) | Surface and terrain heights, used only to check hedges |
 
 The importer does not request owners, residents or BBR units. It uses the same
 UTC snapshot for `registreringstid` and `virkningstid` across all queries.
@@ -183,9 +210,10 @@ SHA-256 hashes, snapshot time, counts and attribution. Preserve this metadata
 when distributing a world and follow the source datasets' terms. Raw register
 extracts and credentials are not included in the repository.
 
-Implementation entry points: `fetch.py`, `prepare.py`,
+Implementation entry points: `fetch.py`, `prepare.py`, `hedges.py`,
 [`src/danish_addresses.rs`](../src/danish_addresses.rs),
-[`src/danish_entrances.rs`](../src/danish_entrances.rs) and
+[`src/danish_entrances.rs`](../src/danish_entrances.rs),
+[`src/element_processing/barriers.rs`](../src/element_processing/barriers.rs) and
 [`src/trees/density.rs`](../src/trees/density.rs). Use `--debug` for entrance
 placement diagnostics.
 
@@ -197,8 +225,9 @@ cargo test --locked --no-default-features
 ```
 
 The Python tests run without network access or real credentials. They cover
-record linking, coordinates, pagination, failures and credential handling.
-Rust tests cover import, entrance placement, signs and tree rules. Automated
+record linking, coordinates, pagination, hedge classification, failures and
+credential handling. Rust tests cover import, entrance placement, signs, hedges
+and tree rules. Automated
 checks do not replace visual inspection of buildings and cell boundaries.
 
 - [GeoDanmark GraphQL](https://datafordeler.dk/dataoversigt/geodanmark-vektor/geodanmark-vektor-graphql/)

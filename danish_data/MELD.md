@@ -41,6 +41,9 @@ generating a world. Bounding boxes are **south, west, north, east** in WGS84.
 - `--caves` enables cave generation. `--signage full` is the default.
 - `--world-height vanilla` (default) uses the normal build height, Y -64 to 319,
   with sea level at Y 63. `--world-height earth` uses the extended height instead.
+- Hedges and scrub are added by default (see
+  [hedges and scrub](README.md#hedges-and-scrub)). Running such a plan needs
+  `DATAFORSYNINGEN_TOKEN` in the credentials file; `--no-hedges` plans without them.
 - `--max-cells` limits retained cells (default 1,000, maximum 20,000).
 - `--land-mask FILE` skips open-sea cells. See [ocean filtering](OCEAN.md).
 

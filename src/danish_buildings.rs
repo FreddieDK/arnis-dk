@@ -244,8 +244,16 @@ pub fn apply(
     {
         return Err("Danish supplement has an ID collision with existing OSM data".into());
     }
+    // Real hedges and scrub join as they are; the merge only takes building footprints.
+    let (greenery, incoming): (Vec<_>, Vec<_>) = incoming
+        .into_iter()
+        .partition(|e| e.tags().contains_key("arnis:hedge"));
     let (added, filled, skipped) = merge(elements, incoming, true);
     println!("Danish buildings: {added} added, {filled} enriched, {skipped} overlapping footprints omitted");
+    if !greenery.is_empty() {
+        println!("Danish hedges and scrub: {}", greenery.len());
+        elements.extend(greenery);
+    }
     entrances::apply(elements, args, bbox)?;
     Ok(())
 }
@@ -425,6 +433,40 @@ mod integration_tests {
             LLBBox::new(55.0, 10.0, 56.0, 12.0).unwrap()
         )
         .is_err());
+    }
+
+    #[test]
+    fn real_hedges_and_scrub_join_alongside_the_buildings() {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("danish_data/fixtures/synthetic.json");
+        let mut supplement: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(source).unwrap()).unwrap();
+        let elements = supplement["elements"].as_array_mut().unwrap();
+        let mut node = |id: u64, lat: f64, lon: f64| {
+            elements.push(serde_json::json!({"type": "node", "id": id, "lat": lat, "lon": lon}));
+            id
+        };
+        let a = node(9001, 55.4731, 11.3729);
+        let b = node(9002, 55.4731, 11.3731);
+        let hedge = serde_json::json!({"type": "way", "id": 9100, "nodes": [a, b],
+            "tags": {"barrier": "hedge", "arnis:hedge": "geodanmark"}});
+        elements.push(hedge);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("supplement.json");
+        std::fs::write(&path, supplement.to_string()).unwrap();
+        let args = Args::parse_from([
+            "arnis",
+            "--bbox",
+            "55,11,56,12",
+            "--danish-buildings",
+            path.to_str().unwrap(),
+        ]);
+        let mut elements = Vec::new();
+        apply(&mut elements, &args, args.bbox.unwrap()).unwrap();
+        assert_eq!(elements.len(), 2, "the building and the hedge");
+        assert!(elements
+            .iter()
+            .any(|e| e.tags().get("barrier").is_some_and(|v| v == "hedge")));
     }
 
     #[test]

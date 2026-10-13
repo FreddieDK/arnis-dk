@@ -196,16 +196,25 @@ def main():
     parser.add_argument('--bbox', required=True, help='min_lat,min_lon,max_lat,max_lon; max 10 km2')
     parser.add_argument('--credentials-file', type=Path, help='Local .env file; otherwise read DATAFORDELER_API_KEY')
     parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--hedges', action=argparse.BooleanOptionalAction, default=True,
+                        help='Add GeoDanmark hedges and scrub; untyped hedges need DATAFORSYNINGEN_TOKEN')
     args = parser.parse_args()
     try:
         bbox = bounds(args.bbox)
-        outlines, bbr, dar, at = fetch(bbox, load_key(args.credentials_file))
+        key = load_key(args.credentials_file)
+        outlines, bbr, dar, at = fetch(bbox, key)
         # Each successful run is an immutable local snapshot, usable by prepare.py offline.
         snapshot = args.output.parent / (args.output.stem + '-sources-' + at.strftime('%Y%m%dT%H%M%S%fZ'))
         paths = [snapshot / name for name in ('GeoDanmark-Bygning.json', 'BBR-Bygning.json', 'DAR-Husnummer.json')]
         for path, rows in zip(paths, (outlines, bbr, dar)):
             atomic_json(path, rows)
         result = prepare(*paths, bbox=bbox, at=at)
+        if args.hedges:
+            from hedges import add, load_token
+            token = load_token(args.credentials_file)
+            if not token:
+                print('Note: no DATAFORSYNINGEN_TOKEN; only hedges GeoDanmark types as living are added.')
+            add(result, bbox, outlines, key, at, token)
         result['arnis_dk']['download'] = {'service': 'Datafordeler GraphQL v2', 'snapshot': snapshot.name}
         atomic_json(args.output, result)
         print(json.dumps(result['arnis_dk']['counts'], indent=2))
