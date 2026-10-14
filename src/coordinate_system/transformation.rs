@@ -1,6 +1,6 @@
 use super::cartesian::{XZBBox, XZPoint};
 use super::geographic::{LLBBox, LLPoint};
-use crate::projection::{McdkProjection, WebMercatorProjection, WorldProjection};
+use crate::projection::{Utm32Projection, WebMercatorProjection, WorldProjection};
 
 /// Internal mode discriminator so `transform_point` can dispatch between the
 /// legacy linear interpolation and Web Mercator projection.
@@ -8,7 +8,7 @@ enum ProjectionMode {
     /// Existing linear-interpolation mode (no geographic projection).
     Local,
     WebMercator(WebMercatorProjection),
-    Mcdk(McdkProjection),
+    Utm32(Utm32Projection),
 }
 
 /// Transform geographic space (within llbbox) to a local tangential cartesian space (within xzbbox)
@@ -126,7 +126,7 @@ impl CoordTransformer {
                 min_lng: llbbox.min().lng(),
                 mode: match projection {
                     WorldProjection::WebMercator(p) => ProjectionMode::WebMercator(p),
-                    WorldProjection::Mcdk(p) => ProjectionMode::Mcdk(p),
+                    WorldProjection::Utm32(p) => ProjectionMode::Utm32(p),
                 },
             },
             xzbbox,
@@ -151,7 +151,7 @@ impl CoordTransformer {
                 let z = proj.z_for_lat(llpoint.lat()).floor();
                 XZPoint::new(x as i32, z as i32)
             }
-            ProjectionMode::Mcdk(proj) => {
+            ProjectionMode::Utm32(proj) => {
                 let (x, z) = proj.forward(llpoint.lat(), llpoint.lng());
                 XZPoint::new(x.floor() as i32, z.floor() as i32)
             }

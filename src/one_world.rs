@@ -11,7 +11,7 @@ use crate::coordinate_system::cartesian::XZBBox;
 use crate::coordinate_system::geographic::LLBBox;
 use crate::elevation::ElevationAffine;
 use crate::projection::{
-    llbbox_for_rect, snap_bbox_to_chunks, snap_rect_to_chunks, McdkProjection, ProjectionKind,
+    llbbox_for_rect, snap_bbox_to_chunks, snap_rect_to_chunks, ProjectionKind, Utm32Projection,
     WebMercatorProjection, WorldProjection,
 };
 use crate::world_utils::{world_is_locked, SessionLock};
@@ -30,7 +30,7 @@ pub const DEFAULT_WORLD_NAME: &str = "Arnis One World";
 pub const MANIFEST_VERSION: u32 = 3;
 /// 4: the world uses the UTM zone 32 frame, which an older build would
 /// read as Web Mercator. Web Mercator worlds keep writing version 3.
-pub const MCDK_MANIFEST_VERSION: u32 = 4;
+pub const UTM32_MANIFEST_VERSION: u32 = 4;
 
 /// How a One World maps lat/lon to blocks.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -39,10 +39,11 @@ pub enum Frame {
     /// Web Mercator around `origin_lat`/`origin_lon`, as every world before version 4.
     #[default]
     WebMercator,
-    /// UTM zone 32N with `X = E - 600000`, `Z = 6200000 - N`: the coordinates of
-    /// the fixed UTM block frame. `origin_lat`/`origin_lon` hold its
-    /// (0, 0) near Samsø, which also anchors the climate.
-    Mcdk,
+    /// UTM zone 32N as a fixed block frame, `X = E - 600000`, `Z = 6200000 - N`.
+    /// `origin_lat`/`origin_lon` hold its (0, 0) near Samsø, which also anchors
+    /// the climate. Manifests written before the rename call it `mcdk`.
+    #[serde(alias = "mcdk")]
+    Utm32,
 }
 
 impl Frame {
@@ -53,22 +54,22 @@ impl Frame {
     pub fn kind(self) -> ProjectionKind {
         match self {
             Frame::WebMercator => ProjectionKind::WebMercator,
-            Frame::Mcdk => ProjectionKind::Mcdk,
+            Frame::Utm32 => ProjectionKind::Utm32,
         }
     }
 
     fn name(self) -> &'static str {
         match self {
             Frame::WebMercator => "Web Mercator",
-            Frame::Mcdk => "UTM zone 32",
+            Frame::Utm32 => "UTM zone 32",
         }
     }
 }
 
 /// UTM zone 32 stays exact thousands of kilometres from its meridian, but the
 /// frame is meant for Denmark and its neighbours.
-const MCDK_MAX_LON_FROM_9E: f64 = 15.0;
-const MCDK_LATS: std::ops::RangeInclusive<f64> = 45.0..=72.0;
+const UTM32_MAX_LON_FROM_9E: f64 = 15.0;
+const UTM32_LATS: std::ops::RangeInclusive<f64> = 45.0..=72.0;
 
 /// Sea level of a One World with the normal build height, as in vanilla.
 pub const VANILLA_SEA_LEVEL_Y: i32 = 63;
@@ -159,7 +160,7 @@ impl Manifest {
         Self {
             version: match frame {
                 Frame::WebMercator => MANIFEST_VERSION,
-                Frame::Mcdk => MCDK_MANIFEST_VERSION,
+                Frame::Utm32 => UTM32_MANIFEST_VERSION,
             },
             created_with: format!("arnis {}", env!("CARGO_PKG_VERSION")),
             created_at: unix_now(),
@@ -208,7 +209,7 @@ impl Manifest {
                 self.origin_lon,
                 self.scale,
             )),
-            Frame::Mcdk => WorldProjection::Mcdk(McdkProjection::new(self.scale)),
+            Frame::Utm32 => WorldProjection::Utm32(Utm32Projection::new(self.scale)),
         }
     }
 
@@ -225,7 +226,7 @@ impl Manifest {
             .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
         let manifest: Manifest = serde_json::from_str(&text)
             .map_err(|e| format!("{} is not a valid One World manifest: {e}", path.display()))?;
-        if manifest.version > MCDK_MANIFEST_VERSION {
+        if manifest.version > UTM32_MANIFEST_VERSION {
             return Err(format!(
                 "{} was written by a newer Arnis (manifest version {}); update Arnis to extend this world.",
                 path.display(),
@@ -245,9 +246,9 @@ impl Manifest {
         if !(self.origin_lon.is_finite() && self.origin_lon.abs() <= 180.0) {
             return Err(format!("origin longitude {}", self.origin_lon));
         }
-        if self.frame == Frame::Mcdk && self.version < MCDK_MANIFEST_VERSION {
+        if self.frame == Frame::Utm32 && self.version < UTM32_MANIFEST_VERSION {
             return Err(format!(
-                "the UTM zone 32 frame needs manifest version {MCDK_MANIFEST_VERSION}"
+                "the UTM zone 32 frame needs manifest version {UTM32_MANIFEST_VERSION}"
             ));
         }
         crate::args::validate_scale(self.scale)?;
@@ -366,7 +367,7 @@ pub struct Session {
 
 fn compatibility_errors(manifest: &Manifest, args: &Args) -> Vec<String> {
     let mut errors = Vec::new();
-    if args.projection == ProjectionKind::Mcdk && manifest.frame != Frame::Mcdk {
+    if args.projection == ProjectionKind::Utm32 && manifest.frame != Frame::Utm32 {
         errors.push(format!(
             "the world uses {} coordinates, and a world cannot change its frame",
             manifest.frame.name()
@@ -530,9 +531,9 @@ fn resolve(
                     args.disable_height_limit = false;
                 }
             }
-            let frame = if args.projection == ProjectionKind::Mcdk {
+            let frame = if args.projection == ProjectionKind::Utm32 {
                 println!("One World: UTM zone 32 coordinates (X = E - 600000, Z = 6200000 - N).");
-                Frame::Mcdk
+                Frame::Utm32
             } else {
                 Frame::WebMercator
             };
@@ -541,13 +542,13 @@ fn resolve(
                     (requested.min().lat() + requested.max().lat()) / 2.0,
                     (requested.min().lng() + requested.max().lng()) / 2.0,
                 ),
-                Frame::Mcdk => McdkProjection::new(1.0).inverse(0.0, 0.0),
+                Frame::Utm32 => Utm32Projection::new(1.0).inverse(0.0, 0.0),
             };
             (Manifest::new(args, frame, origin_lat, origin_lon), true)
         }
     };
 
-    if manifest.frame == Frame::Mcdk && args.projection != ProjectionKind::Mcdk {
+    if manifest.frame == Frame::Utm32 && args.projection != ProjectionKind::Utm32 {
         println!("Note: this One World uses UTM zone 32 coordinates.");
     }
     args.scale = manifest.scale;
@@ -560,13 +561,13 @@ fn resolve(
         }
         None => snap_bbox_to_chunks(&projection, requested)?,
     };
-    if manifest.frame == Frame::Mcdk {
+    if manifest.frame == Frame::Utm32 {
         let corners = [
             (llbbox.min().lat(), llbbox.min().lng()),
             (llbbox.max().lat(), llbbox.max().lng()),
         ];
         if corners.iter().any(|&(lat, lon)| {
-            !MCDK_LATS.contains(&lat) || (lon - 9.0).abs() > MCDK_MAX_LON_FROM_9E
+            !UTM32_LATS.contains(&lat) || (lon - 9.0).abs() > UTM32_MAX_LON_FROM_9E
         }) {
             return Err("This area is too far from Denmark for the UTM zone 32 frame.".to_string());
         }
@@ -892,22 +893,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let world = dir.path().join("w");
         let req = LLBBox::from_str(SLAGELSE).unwrap();
-        let mut args = args_for(SLAGELSE, &["--one-world", "--projection", "mcdk"]);
+        let mut args = args_for(SLAGELSE, &["--one-world", "--projection", "utm32"]);
         let session = prepare(&world, &req, &mut args).unwrap();
         let manifest = Manifest::load(&world).unwrap().unwrap();
-        assert_eq!(manifest.frame, Frame::Mcdk);
-        assert_eq!(manifest.version, MCDK_MANIFEST_VERSION);
+        assert_eq!(manifest.frame, Frame::Utm32);
+        assert_eq!(manifest.version, UTM32_MANIFEST_VERSION);
         // (0, 0) near Samsø.
         assert_eq!(
             (manifest.origin_lat, manifest.origin_lon),
             (55.9349761, 10.6007821)
         );
         let text = std::fs::read_to_string(Manifest::path_in(&world)).unwrap();
-        assert!(text.contains("\"frame\": \"mcdk\""), "{text}");
+        assert!(text.contains("\"frame\": \"utm32\""), "{text}");
 
         let run = args.one_world_run.as_ref().unwrap();
-        assert_eq!(run.projection, ProjectionKind::Mcdk);
-        assert_eq!(args.projection, ProjectionKind::Mcdk);
+        assert_eq!(run.projection, ProjectionKind::Utm32);
+        assert_eq!(args.projection, ProjectionKind::Utm32);
         let area = rect(&args, &session);
         assert_eq!(
             [area.min_x(), area.min_z(), area.max_x(), area.max_z()],
@@ -925,12 +926,34 @@ mod tests {
     }
 
     #[test]
+    fn a_world_from_before_the_rename_still_opens_in_the_utm_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = dir.path().join("w");
+        let req = LLBBox::from_str(SLAGELSE).unwrap();
+        drop(
+            prepare(
+                &world,
+                &req,
+                &mut args_for(SLAGELSE, &["--projection", "utm32"]),
+            )
+            .unwrap(),
+        );
+        let path = Manifest::path_in(&world);
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, text.replace("\"utm32\"", "\"mcdk\"")).unwrap();
+        assert_eq!(Manifest::load(&world).unwrap().unwrap().frame, Frame::Utm32);
+        let mut args = args_for(SLAGELSE, &["--projection", "mcdk"]);
+        drop(prepare(&world, &req, &mut args).unwrap());
+        assert_eq!(args.projection, ProjectionKind::Utm32);
+    }
+
+    #[test]
     fn a_block_rect_becomes_the_area_exactly() {
         let dir = tempfile::tempdir().unwrap();
         let world = dir.path().join("w");
         let req = LLBBox::from_str(SLAGELSE).unwrap();
         let cell = "48128,56832,49151,57855";
-        let flags = ["--one-world", "--projection", "mcdk", "--block-rect", cell];
+        let flags = ["--one-world", "--projection", "utm32", "--block-rect", cell];
         let mut args = args_for(SLAGELSE, &flags);
         let session = prepare(&world, &req, &mut args).unwrap();
         assert_eq!(
@@ -943,7 +966,7 @@ mod tests {
             (48128, 56832, 49151, 57855)
         );
         // The bbox covers the whole rectangle, corners included.
-        let proj = McdkProjection::new(1.0);
+        let proj = Utm32Projection::new(1.0);
         for (x, z) in [(48128.0, 56832.0), (49152.0, 57856.0), (48128.0, 57856.0)] {
             let (lat, lon) = proj.inverse(x, z);
             assert!(lat >= session.llbbox.min().lat() && lat <= session.llbbox.max().lat());
@@ -958,7 +981,7 @@ mod tests {
             &["--one-world", "--block-rect", "49152,56832,50175,57855"],
         );
         let session2 = prepare(&world, &req, &mut args2).unwrap();
-        assert_eq!(args2.projection, ProjectionKind::Mcdk);
+        assert_eq!(args2.projection, ProjectionKind::Utm32);
         assert_eq!(rect(&args2, &session2).min_x(), 49152);
         assert!(args2.one_world_run.as_ref().unwrap().extending);
     }
@@ -972,7 +995,7 @@ mod tests {
         let err = prepare(
             &world,
             &req,
-            &mut args_for(SLAGELSE, &["--one-world", "--projection", "mcdk"]),
+            &mut args_for(SLAGELSE, &["--one-world", "--projection", "utm32"]),
         )
         .err()
         .unwrap();
@@ -986,14 +1009,14 @@ mod tests {
     }
 
     #[test]
-    fn the_mcdk_frame_stays_near_denmark() {
+    fn the_utm32_frame_stays_near_denmark() {
         let dir = tempfile::tempdir().unwrap();
         let world = dir.path().join("w");
         let tokyo = "35.68,139.75,35.69,139.76";
         let err = prepare(
             &world,
             &LLBBox::from_str(tokyo).unwrap(),
-            &mut args_for(tokyo, &["--one-world", "--projection", "mcdk"]),
+            &mut args_for(tokyo, &["--one-world", "--projection", "utm32"]),
         )
         .err()
         .unwrap();
@@ -1002,7 +1025,7 @@ mod tests {
     }
 
     #[test]
-    fn a_manifest_claiming_mcdk_below_version_4_is_damaged() {
+    fn a_manifest_claiming_utm32_below_version_4_is_damaged() {
         let dir = tempfile::tempdir().unwrap();
         let world = dir.path().join("w");
         let req = LLBBox::from_str(SLAGELSE).unwrap();
@@ -1010,7 +1033,7 @@ mod tests {
         let path = Manifest::path_in(&world);
         let mut value: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        value["frame"] = "mcdk".into();
+        value["frame"] = "utm32".into();
         std::fs::write(&path, value.to_string()).unwrap();
         let err = Manifest::load(&world).unwrap_err();
         assert!(err.contains("damaged"), "{err}");

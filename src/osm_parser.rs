@@ -2560,16 +2560,16 @@ mod osm_xml_tests {
     /// so it is kept; a bench there could only be placed twice along the seam.
     #[test]
     fn only_wide_point_features_are_kept_from_the_clip_margin() {
-        use crate::projection::{llbbox_for_rect, McdkProjection, ProjectionKind, ProjectionSpec};
+        use crate::projection::{llbbox_for_rect, ProjectionKind, ProjectionSpec, Utm32Projection};
         let rect = [48128, 57344, 49151, 58367];
         let spec = ProjectionSpec {
-            kind: ProjectionKind::Mcdk,
+            kind: ProjectionKind::Utm32,
             origin: None,
             scale: 1.0,
             clip_pad: 64,
             rect: Some(rect),
         };
-        let proj = McdkProjection::new(1.0);
+        let proj = Utm32Projection::new(1.0);
         let node = |id: u64, x: f64, z: f64, tags: &str| {
             let (lat, lon) = proj.inverse(x + 0.5, z + 0.5);
             format!(r#"<node id="{id}" lat="{lat}" lon="{lon}">{tags}</node>"#)

@@ -121,7 +121,7 @@ def bbox_rect(bounds, scale):
 
 
 def cells(bounds, scale, regions):
-    """Squares of `regions` x `regions` region files on the MCDK grid, clipped to
+    """Squares of `regions` x `regions` region files on the block grid, clipped to
     the area, north to south and west to east. Neighbours share an edge exactly."""
     size = regions * REGION
     x0, z0, x1, z1 = bbox_rect(bounds, scale)

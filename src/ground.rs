@@ -151,7 +151,7 @@ impl GroundFrame {
                         crate::projection::snap_edge(p.x_for_lon(bbox.min().lng()), false),
                         crate::projection::snap_edge(p.z_for_lat(bbox.max().lat()), false),
                     ),
-                    WorldProjection::Mcdk(_) => self.rect_min,
+                    WorldProjection::Utm32(_) => self.rect_min,
                 };
                 EcoMap::build(world_w, world_h, (x0, z0), move |gx, gz| {
                     proj.inverse(f64::from(x0) + gx, f64::from(z0) + gz)
@@ -183,7 +183,7 @@ impl GroundFrame {
             };
         };
         let mercator = match self.projection {
-            Some(proj @ WorldProjection::Mcdk(_)) => {
+            Some(proj @ WorldProjection::Utm32(_)) => {
                 return self.block_plan(proj, bbox, scale, (world_w, world_h));
             }
             Some(WorldProjection::WebMercator(p)) => Some(p),
@@ -1926,7 +1926,7 @@ pub(crate) mod test_support {
 mod frame_tests {
     use super::*;
     use crate::projection::{
-        llbbox_for_rect, snap_bbox_to_chunks, McdkProjection, WebMercatorProjection,
+        llbbox_for_rect, snap_bbox_to_chunks, Utm32Projection, WebMercatorProjection,
     };
 
     fn projected_frame(pad: usize, w: usize, h: usize) -> GroundFrame {
@@ -1996,13 +1996,13 @@ mod frame_tests {
         assert_eq!(plan.final_dims, (side, 16));
     }
 
-    fn mcdk_frame(pad: usize, rect: &XZBBox) -> GroundFrame {
+    fn utm32_frame(pad: usize, rect: &XZBBox) -> GroundFrame {
         GroundFrame {
             world_dims: Some((
                 (rect.max_x() - rect.min_x() + 1) as usize,
                 (rect.max_z() - rect.min_z() + 1) as usize,
             )),
-            projection: Some(WorldProjection::Mcdk(McdkProjection::new(1.0))),
+            projection: Some(WorldProjection::Utm32(Utm32Projection::new(1.0))),
             rect_min: (rect.min_x(), rect.min_z()),
             pad_blocks: pad,
             affine: AffinePolicy::Fit,
@@ -2014,9 +2014,9 @@ mod frame_tests {
     fn a_utm_plan_reads_every_block_centre_inside_the_fetched_grid() {
         // A 1024-block cell in Slagelse.
         let rect = XZBBox::rect_from_min_max(48128, 56832, 49151, 57855).unwrap();
-        let proj = WorldProjection::Mcdk(McdkProjection::new(1.0));
+        let proj = WorldProjection::Utm32(Utm32Projection::new(1.0));
         let eff = llbbox_for_rect(&proj, &rect).unwrap();
-        let plan = mcdk_frame(96, &rect).fetch_plan(&eff, 1.0);
+        let plan = utm32_frame(96, &rect).fetch_plan(&eff, 1.0);
         assert_eq!(plan.pad, 96);
         assert_eq!(plan.final_dims, (1024, 1024));
         let GridLayout::Blocks { sampler, world } = &plan.layout else {

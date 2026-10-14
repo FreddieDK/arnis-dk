@@ -62,7 +62,7 @@ generating a world. Bounding boxes are **south, west, north, east** in WGS84.
   - In cells that reach across the border, chunks on another country's land are
     removed after generation. The map then follows the land border to within
     16 blocks, and the bedrock edge is sealed along the cut.
-  - Needs `--land-mask` and the default `--frame mcdk`.
+  - Needs `--land-mask` and the default `--frame utm32`.
 
 Each live Danish data request must cover at most 10 km², including the cell's
 data margin. Use smaller cells if a plan exceeds this limit. Cells include

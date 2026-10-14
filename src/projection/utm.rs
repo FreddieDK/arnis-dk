@@ -12,10 +12,10 @@ const GRS80_A: f64 = 6_378_137.0;
 /// GRS80 flattening.
 const GRS80_F: f64 = 1.0 / 298.257_222_101;
 
-/// MCDK `X = E - 600000`.
-pub const MCDK_EAST_OFFSET: f64 = 600_000.0;
-/// MCDK `Z = 6200000 - N`.
-pub const MCDK_NORTH_OFFSET: f64 = 6_200_000.0;
+/// Block `X = E - 600000`.
+pub const UTM32_EAST_OFFSET: f64 = 600_000.0;
+/// Block `Z = 6200000 - N`.
+pub const UTM32_NORTH_OFFSET: f64 = 6_200_000.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TransverseMercator {
@@ -128,12 +128,12 @@ impl TransverseMercator {
 /// `Z = 6200000 - N`, one block per metre at scale 1, so `(0, 0)` lies near
 /// Samsø and north is -Z. Other scales multiply both axes.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct McdkProjection {
+pub struct Utm32Projection {
     pub scale: f64,
     tm: TransverseMercator,
 }
 
-impl McdkProjection {
+impl Utm32Projection {
     pub fn new(scale: f64) -> Self {
         Self {
             scale,
@@ -145,15 +145,15 @@ impl McdkProjection {
     pub fn forward(&self, lat: f64, lon: f64) -> (f64, f64) {
         let (e, n) = self.tm.forward(lat, lon);
         (
-            (e - MCDK_EAST_OFFSET) * self.scale,
-            (MCDK_NORTH_OFFSET - n) * self.scale,
+            (e - UTM32_EAST_OFFSET) * self.scale,
+            (UTM32_NORTH_OFFSET - n) * self.scale,
         )
     }
 
     pub fn inverse(&self, x: f64, z: f64) -> (f64, f64) {
         self.tm.inverse(
-            x / self.scale + MCDK_EAST_OFFSET,
-            MCDK_NORTH_OFFSET - z / self.scale,
+            x / self.scale + UTM32_EAST_OFFSET,
+            UTM32_NORTH_OFFSET - z / self.scale,
         )
     }
 }
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn the_origin_lies_near_samsoe() {
-        let p = McdkProjection::new(1.0);
+        let p = Utm32Projection::new(1.0);
         let (lat, lon) = p.inverse(0.0, 0.0);
         // pyproj: 55.93497611973894, 10.600782059467294
         assert!((lat - 55.934_976_119_7).abs() < 1e-9, "{lat}");
@@ -211,8 +211,8 @@ mod tests {
 
     #[test]
     fn scale_multiplies_both_axes() {
-        let one = McdkProjection::new(1.0);
-        let two = McdkProjection::new(2.0);
+        let one = Utm32Projection::new(1.0);
+        let two = Utm32Projection::new(2.0);
         let (x1, z1) = one.forward(55.4, 11.35);
         let (x2, z2) = two.forward(55.4, 11.35);
         assert!((x2 - 2.0 * x1).abs() < 1e-6 && (z2 - 2.0 * z1).abs() < 1e-6);

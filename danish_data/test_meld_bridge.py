@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import mcdk
+import utm32
 import meld_bridge as bridge
 
 
@@ -98,7 +98,7 @@ class BridgeTests(unittest.TestCase):
             probe.assert_called_once_with(binary.resolve(),
                                           ['--one-world-height', 'vanilla', '--block-rect'])
             doc = bridge.read_json(args.job / 'plan.json')
-            self.assertEqual((doc['frame'], doc['meld_source']), ('mcdk', None))
+            self.assertEqual((doc['frame'], doc['meld_source']), ('utm32', None))
             rects = [c['rect'] for c in doc['cells']]
             self.assertEqual(len(rects), 42)
             for x0, z0, x1, z1 in rects:
@@ -119,29 +119,32 @@ class BridgeTests(unittest.TestCase):
             self.assertTrue(s < 55.4036 < n and w < 11.354 < e)
             self.assertTrue(bridge.contains(cell['data_bbox'], cell['bbox']))
             cmd = bridge.command(doc, cell, args.job, Path('b.json'))
-            self.assertEqual(cmd[cmd.index('--projection') + 1], 'mcdk')
+            self.assertEqual(cmd[cmd.index('--projection') + 1], 'utm32')
             self.assertEqual(cmd[cmd.index('--block-rect') + 1], '48128,57344,49151,58367')
             bridge.verify_inputs({**doc, 'arnis': None})
+            # Plans made before the rename call the frame mcdk.
+            self.assertEqual(bridge.frame_name('mcdk'), 'utm32')
+            self.assertEqual(bridge.frame_name('meld'), 'meld')
 
-    def test_mcdk_frame_matches_pyproj(self):
+    def test_utm32_frame_matches_pyproj(self):
         # pyproj 3.8, EPSG:4258 -> EPSG:25832.
         for lat, lon, e, n in [(55.8333, 10.6, 600212.8016142369, 6188684.441020456),
                                (55.1009, 14.7066, 863917.8358138121, 6120903.692376184),
                                (57.7209, 10.5839, 594345.2578742233, 6398740.409466657)]:
-            pe, pn = mcdk.utm32(lat, lon)
+            pe, pn = utm32.utm32(lat, lon)
             self.assertAlmostEqual(pe, e, places=4)
             self.assertAlmostEqual(pn, n, places=4)
-            la, lo = mcdk.utm32_inverse(e, n)
+            la, lo = utm32.utm32_inverse(e, n)
             self.assertAlmostEqual(la, lat, places=9)
             self.assertAlmostEqual(lo, lon, places=9)
-        x, z = mcdk.block(55.4036, 11.354)
+        x, z = utm32.block(55.4036, 11.354)
         self.assertEqual((int(x // 1), int(z // 1)), (49051, 57773))
-        s, w, n, e = mcdk.rect_bbox([0, 0, 1023, 1023], 1)
+        s, w, n, e = utm32.rect_bbox([0, 0, 1023, 1023], 1)
         for bx, bz in [(0, 0), (1024, 0), (0, 1024), (1024, 1024)]:
-            lat, lon = mcdk.latlon(bx, bz)
+            lat, lon = utm32.latlon(bx, bz)
             self.assertTrue(s <= lat <= n and w <= lon <= e)
 
-    def test_mcdk_result_is_checked_in_blocks(self):
+    def test_utm32_result_is_checked_in_blocks(self):
         with tempfile.TemporaryDirectory() as name:
             world = Path(name)
             (world/'level.dat').write_bytes(b'test')

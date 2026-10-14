@@ -1286,7 +1286,7 @@ $(document).ready(function () {
         // One World: the frame of src/projection, Web Mercator or the UTM zone 32 frame.
         if (data.areas) {
             var x, z;
-            if (data.frame === 'mcdk') {
+            if (data.frame === 'utm32') {
                 var utm = utm32(lat, lng);
                 x = Math.floor((utm.e - 600000) * data.scale);
                 z = Math.floor((6200000 - utm.n) * data.scale);

@@ -57,7 +57,7 @@ pub struct Args {
     /// Projection mode for coordinate mapping.
     /// local: each generation starts at Minecraft (0,0) (default).
     /// web_mercator: Web Mercator centred on the bbox.
-    /// mcdk: a fixed frame on UTM zone 32N
+    /// utm32: a fixed frame on UTM zone 32N
     /// with X = E - 600000 and Z = 6200000 - N, so (0,0) lies near Samsoe. Picks
     /// the frame of a new --one-world; an existing One World keeps its own.
     #[arg(long, default_value = "local")]
@@ -65,7 +65,7 @@ pub struct Args {
 
     /// One World area as a block rectangle min_x,min_z,max_x,max_z, grown to whole
     /// chunks. It replaces the area --bbox would give; --bbox is still needed and
-    /// is then widened to cover the rectangle. In the mcdk frame a lat/lon bbox and
+    /// is then widened to cover the rectangle. In the utm32 frame a lat/lon bbox and
     /// a block rectangle differ slightly, so neighbouring areas tile exactly only
     /// when given as rectangles.
     #[arg(long, allow_hyphen_values = true, value_parser = parse_block_rect)]
@@ -784,9 +784,9 @@ pub fn validate_args(args: &Args) -> Result<(), String> {
         return Err("--one-world-height only applies to --one-world.".to_string());
     } else if args.block_rect.is_some() {
         return Err("--block-rect only applies to --one-world.".to_string());
-    } else if args.projection == crate::projection::ProjectionKind::Mcdk {
+    } else if args.projection == crate::projection::ProjectionKind::Utm32 {
         return Err(
-            "--projection mcdk places areas at fixed world coordinates, so it needs --one-world."
+            "--projection utm32 places areas at fixed world coordinates, so it needs --one-world."
                 .to_string(),
         );
     }

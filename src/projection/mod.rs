@@ -1,7 +1,7 @@
 pub mod utm;
 pub mod web_mercator;
 
-pub use utm::McdkProjection;
+pub use utm::Utm32Projection;
 pub use web_mercator::WebMercatorProjection;
 
 use crate::coordinate_system::cartesian::XZBBox;
@@ -29,7 +29,7 @@ pub enum ProjectionKind {
     WebMercator,
     /// UTM zone 32N as a fixed block frame (`X = E - 600000`,
     /// `Z = 6200000 - N`). One World only.
-    Mcdk,
+    Utm32,
     /// Simple local coordinate system (no geographic projection).
     Local,
 }
@@ -38,7 +38,7 @@ impl fmt::Display for ProjectionKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ProjectionKind::WebMercator => write!(f, "web_mercator"),
-            ProjectionKind::Mcdk => write!(f, "mcdk"),
+            ProjectionKind::Utm32 => write!(f, "utm32"),
             ProjectionKind::Local => write!(f, "local"),
         }
     }
@@ -50,7 +50,8 @@ impl FromStr for ProjectionKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "web_mercator" | "webmercator" | "mercator" => Ok(ProjectionKind::WebMercator),
-            "mcdk" | "utm32" => Ok(ProjectionKind::Mcdk),
+            // `mcdk` is the name worlds and plans made before October 2026 carry.
+            "utm32" | "mcdk" => Ok(ProjectionKind::Utm32),
             "local" => Ok(ProjectionKind::Local),
             other => Err(format!("unknown projection kind: '{other}'")),
         }
@@ -61,7 +62,7 @@ impl FromStr for ProjectionKind {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WorldProjection {
     WebMercator(WebMercatorProjection),
-    Mcdk(McdkProjection),
+    Utm32(Utm32Projection),
 }
 
 impl WorldProjection {
@@ -69,7 +70,7 @@ impl WorldProjection {
     pub fn forward(&self, lat: f64, lon: f64) -> (f64, f64) {
         match self {
             Self::WebMercator(p) => (p.x_for_lon(lon), p.z_for_lat(lat)),
-            Self::Mcdk(p) => p.forward(lat, lon),
+            Self::Utm32(p) => p.forward(lat, lon),
         }
     }
 
@@ -77,7 +78,7 @@ impl WorldProjection {
     pub fn inverse(&self, x: f64, z: f64) -> (f64, f64) {
         match self {
             Self::WebMercator(p) => (p.lat_for_z(z), p.lon_for_x(x)),
-            Self::Mcdk(p) => p.inverse(x, z),
+            Self::Utm32(p) => p.inverse(x, z),
         }
     }
 }
@@ -144,7 +145,7 @@ impl ProjectionSpec {
     /// The frame of a projected run.
     pub fn frame(&self, llbbox: &LLBBox) -> WorldProjection {
         match self.kind {
-            ProjectionKind::Mcdk => WorldProjection::Mcdk(McdkProjection::new(self.scale)),
+            ProjectionKind::Utm32 => WorldProjection::Utm32(Utm32Projection::new(self.scale)),
             _ => WorldProjection::WebMercator(self.mercator(llbbox)),
         }
     }
@@ -155,7 +156,7 @@ impl ProjectionSpec {
             ProjectionKind::WebMercator => {
                 CoordTransformer::with_projection(llbbox, self.scale, self.mercator(llbbox))
             }
-            ProjectionKind::Mcdk => {
+            ProjectionKind::Utm32 => {
                 let frame = self.frame(llbbox);
                 let rect = match self.rect {
                     Some([x0, z0, x1, z1]) => XZBBox::rect_from_min_max(x0, z0, x1, z1)?,
@@ -381,7 +382,7 @@ pub fn llbbox_for_rect(proj: &WorldProjection, xzbbox: &XZBBox) -> Result<LLBBox
             p.lat_for_z(xzbbox.min_z() as f64),
             p.lon_for_x(xzbbox.max_x() as f64 + 1.0),
         ),
-        WorldProjection::Mcdk(_) => enclosing_llbbox(
+        WorldProjection::Utm32(_) => enclosing_llbbox(
             proj,
             (xzbbox.min_x() as f64, xzbbox.min_z() as f64),
             (xzbbox.max_x() as f64 + 1.0, xzbbox.max_z() as f64 + 1.0),
@@ -398,14 +399,14 @@ mod tests {
         WorldProjection::WebMercator(WebMercatorProjection::new(lat, lon, scale))
     }
 
-    fn mcdk(scale: f64) -> WorldProjection {
-        WorldProjection::Mcdk(McdkProjection::new(scale))
+    fn utm32(scale: f64) -> WorldProjection {
+        WorldProjection::Utm32(Utm32Projection::new(scale))
     }
 
     #[test]
     fn test_projection_kind_display() {
         assert_eq!(ProjectionKind::WebMercator.to_string(), "web_mercator");
-        assert_eq!(ProjectionKind::Mcdk.to_string(), "mcdk");
+        assert_eq!(ProjectionKind::Utm32.to_string(), "utm32");
         assert_eq!(ProjectionKind::Local.to_string(), "local");
     }
 
@@ -442,7 +443,7 @@ mod tests {
     fn test_projection_kind_roundtrip() {
         for kind in [
             ProjectionKind::WebMercator,
-            ProjectionKind::Mcdk,
+            ProjectionKind::Utm32,
             ProjectionKind::Local,
         ] {
             let s = kind.to_string();
@@ -530,8 +531,8 @@ mod tests {
     }
 
     #[test]
-    fn an_mcdk_area_covers_the_request_and_its_bbox_covers_the_area() {
-        let proj = mcdk(1.0);
+    fn a_utm32_area_covers_the_request_and_its_bbox_covers_the_area() {
+        let proj = utm32(1.0);
         // Slagelse town; UTM is turned about 1.9 degrees against the meridians here.
         let req = LLBBox::new(55.38167, 11.30991, 55.43070, 11.41153).unwrap();
         let (rect, eff) = snap_bbox_to_chunks(&proj, &req).unwrap();
@@ -563,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn a_block_rect_is_kept_exactly_in_mcdk() {
+    fn a_block_rect_is_kept_exactly_in_utm32() {
         let rect = snap_rect_to_chunks([48128, 56832, 49151, 57855]).unwrap();
         assert_eq!(
             (rect.min_x(), rect.min_z(), rect.max_x(), rect.max_z()),
@@ -577,13 +578,13 @@ mod tests {
         assert!(snap_rect_to_chunks([10, 0, 9, 0]).is_err());
 
         let spec = ProjectionSpec {
-            kind: ProjectionKind::Mcdk,
+            kind: ProjectionKind::Utm32,
             origin: None,
             scale: 1.0,
             clip_pad: 0,
             rect: Some([48128, 56832, 49151, 57855]),
         };
-        let eff = llbbox_for_rect(&mcdk(1.0), &rect).unwrap();
+        let eff = llbbox_for_rect(&utm32(1.0), &rect).unwrap();
         let (t, again) = spec.transformer(&eff).unwrap();
         assert_eq!(
             (again.min_x(), again.min_z(), again.max_x(), again.max_z()),
@@ -596,8 +597,8 @@ mod tests {
     }
 
     #[test]
-    fn neighbouring_mcdk_rects_share_their_edge() {
-        let proj = mcdk(1.0);
+    fn neighbouring_utm32_rects_share_their_edge() {
+        let proj = utm32(1.0);
         let west = XZBBox::rect_from_min_max(0, 0, 1023, 1023).unwrap();
         let east = XZBBox::rect_from_min_max(1024, 0, 2047, 1023).unwrap();
         let (bw, be) = (
@@ -628,20 +629,20 @@ mod tests {
     #[test]
     fn a_one_world_fetch_covers_the_clip_margin() {
         let spec = ProjectionSpec {
-            kind: ProjectionKind::Mcdk,
+            kind: ProjectionKind::Utm32,
             origin: None,
             scale: 1.0,
             clip_pad: 64,
             rect: Some([48128, 57344, 49151, 58367]),
         };
         let area = llbbox_for_rect(
-            &mcdk(1.0),
+            &utm32(1.0),
             &XZBBox::rect_from_min_max(48128, 57344, 49151, 58367).unwrap(),
         )
         .unwrap();
         let fetch = spec.fetch_bbox(&area);
         for (x, z) in [(48064.0, 57280.0), (49216.0, 58432.0)] {
-            let (lat, lon) = mcdk(1.0).inverse(x, z);
+            let (lat, lon) = utm32(1.0).inverse(x, z);
             assert!(lat >= fetch.min().lat() && lat <= fetch.max().lat());
             assert!(lon >= fetch.min().lng() && lon <= fetch.max().lng());
         }

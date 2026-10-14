@@ -79,7 +79,7 @@ without gaps or overlaps.
   0° in western Jutland to about 3° in Copenhagen and 5° on Bornholm.
 - **Existing worlds.** A One World keeps the frame it was created with and is
   never converted. Plan with `--frame meld` for the earlier Web Mercator grid.
-- **CLI.** `--one-world --projection mcdk` creates such a world;
+- **CLI.** `--one-world --projection utm32` creates such a world;
   `--block-rect min_x,min_z,max_x,max_z` adds an exact block rectangle to it.
 
 ## Survival servers

@@ -14,21 +14,21 @@ from shapely.geometry import box, shape
 from shapely.ops import transform, unary_union
 from shapely.prepared import prep
 
-import mcdk
+import utm32
 
 
 def utm(x_lon, y_lat):
     """WGS84 lon/lat to EPSG:25832 metres, for shapely.ops.transform."""
     import numpy as np
-    pts = [mcdk.utm32(lat, lon) for lon, lat in zip(np.atleast_1d(x_lon), np.atleast_1d(y_lat))]
+    pts = [utm32.utm32(lat, lon) for lon, lat in zip(np.atleast_1d(x_lon), np.atleast_1d(y_lat))]
     return [p[0] for p in pts], [p[1] for p in pts]
 
 
 def rect_metres(rect, scale):
-    """The UTM box of an inclusive MCDK block rectangle."""
+    """The UTM box of an inclusive block rectangle."""
     x0, z0, x1, z1 = rect
-    return box(x0 / scale + mcdk.EAST_OFFSET, mcdk.NORTH_OFFSET - (z1 + 1) / scale,
-               (x1 + 1) / scale + mcdk.EAST_OFFSET, mcdk.NORTH_OFFSET - z0 / scale)
+    return box(x0 / scale + utm32.EAST_OFFSET, utm32.NORTH_OFFSET - (z1 + 1) / scale,
+               (x1 + 1) / scale + utm32.EAST_OFFSET, utm32.NORTH_OFFSET - z0 / scale)
 
 
 class CountryMask:
@@ -71,8 +71,8 @@ class CountryMask:
         cxs = np.arange(x0 // 16, x1 // 16 + 1)
         czs = np.arange(z0 // 16, z1 // 16 + 1)
         gx, gz = np.meshgrid(cxs, czs)
-        e = (gx * 16 + 8) / scale + mcdk.EAST_OFFSET
-        n = mcdk.NORTH_OFFSET - (gz * 16 + 8) / scale
+        e = (gx * 16 + 8) / scale + utm32.EAST_OFFSET
+        n = utm32.NORTH_OFFSET - (gz * 16 + 8) / scale
         hit = shapely.contains_xy(foreign, e, n)
         return [(int(cx), int(cz)) for cx, cz in zip(gx[hit], gz[hit])]
 

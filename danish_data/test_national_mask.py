@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from shapely.geometry import box, mapping
 
-import mcdk
+import utm32
 import meld_bridge as bridge
 import national_mask
 import seal_void_edges as edge
@@ -27,7 +27,7 @@ def write_country(path):
 
 
 def rect_at(lat, lon, size=256):
-    x, z = mcdk.block(lat, lon)
+    x, z = utm32.block(lat, lon)
     x0, z0 = int(x // 16) * 16 - size // 2, int(z // 16) * 16 - size // 2
     return [x0, z0, x0 + size - 1, z0 + size - 1]
 
@@ -55,12 +55,12 @@ class NationalMaskTests(unittest.TestCase):
         total = (rect[2] - rect[0] + 1) // 16 * ((rect[3] - rect[1] + 1) // 16)
         self.assertTrue(0 < len(chunks) < total)
         for cx, cz in chunks:
-            lat, _ = mcdk.latlon(cx * 16 + 8, cz * 16 + 8)
+            lat, _ = utm32.latlon(cx * 16 + 8, cz * 16 + 8)
             self.assertLess(lat, BORDER)
         kept = {(cx, cz) for cx in range(rect[0] // 16, rect[2] // 16 + 1)
                 for cz in range(rect[1] // 16, rect[3] // 16 + 1)} - set(chunks)
         for cx, cz in kept:
-            lat, _ = mcdk.latlon(cx * 16 + 8, cz * 16 + 8)
+            lat, _ = utm32.latlon(cx * 16 + 8, cz * 16 + 8)
             self.assertGreaterEqual(lat, BORDER - 1e-9)
         self.assertEqual(self.mask.foreign_chunks(rect_at(55.1, 9.3), 1), [])
 
@@ -99,7 +99,7 @@ class NationalMaskTests(unittest.TestCase):
         binary.write_bytes(b'fake')
         snapshot = root / 'bridges.json'
         bridge.atomic_json(snapshot, {'arnis_dk_bridge_coverage': [54, 8, 57, 11], 'elements': []})
-        args = argparse.Namespace(scale=1, cell_regions=1, max_cells=100, threads=1, frame='mcdk',
+        args = argparse.Namespace(scale=1, cell_regions=1, max_cells=100, threads=1, frame='utm32',
                                   job=root / 'job', bbox='54.86,9.28,54.95,9.32',
                                   arnis=binary, danish_buildings=None, osm_file=None, caves=True,
                                   signage='full', land_mask=self.land_path, coast_buffer_m=0,

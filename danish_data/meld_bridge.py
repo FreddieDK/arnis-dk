@@ -90,16 +90,21 @@ def frame_flags(cell):
     rect = cell.get('rect')
     if not rect:
         return []
-    return ['--projection', 'mcdk', '--block-rect', ','.join(map(str, rect))]
+    return ['--projection', 'utm32', '--block-rect', ','.join(map(str, rect))]
 
 
-def mcdk_cells(bounds, scale, regions):
+def utm32_cells(bounds, scale, regions):
     """Cells as squares of whole region files in the UTM zone 32 frame
     (UTM zone 32, X = E - 600000, Z = 6200000 - N), with the lat/lon bbox around each."""
-    import mcdk
-    return [{'cell_key': f'mcdk {rect[0]},{rect[1]}', 'rect': rect,
-             'bbox': dict(zip(['south', 'west', 'north', 'east'], mcdk.rect_bbox(rect, scale)))}
-            for rect in mcdk.cells(bounds, scale, regions)]
+    import utm32
+    return [{'cell_key': f'utm32 {rect[0]},{rect[1]}', 'rect': rect,
+             'bbox': dict(zip(['south', 'west', 'north', 'east'], utm32.rect_bbox(rect, scale)))}
+            for rect in utm32.cells(bounds, scale, regions)]
+
+
+def frame_name(value):
+    """`mcdk` is the name plans made before October 2026 carry for `utm32`."""
+    return 'utm32' if value == 'mcdk' else value
 
 
 def probe(executable, extra=()):
@@ -141,8 +146,8 @@ def plan(args):
     if country_record:
         if not mask:
             raise ValueError('--country needs --land-mask, which tells land from sea')
-        if getattr(args, 'frame', 'mcdk') != 'mcdk':
-            raise ValueError('--country needs --frame mcdk')
+        if frame_name(getattr(args, 'frame', 'utm32')) != 'utm32':
+            raise ValueError('--country needs --frame utm32')
         from national_mask import CountryMask
         country = CountryMask(country_record['path'], mask)
     bridge_document = None
@@ -155,14 +160,14 @@ def plan(args):
     world_height = getattr(args, 'world_height', 'vanilla')
     if world_height not in ('vanilla', 'earth'):
         raise ValueError('World height must be vanilla or earth')
-    frame = getattr(args, 'frame', 'mcdk')
-    if frame not in ('mcdk', 'meld'):
-        raise ValueError('Frame must be mcdk or meld')
+    frame = frame_name(getattr(args, 'frame', 'utm32'))
+    if frame not in ('utm32', 'meld'):
+        raise ValueError('Frame must be utm32 or meld')
     s, w, n, e = bounds
-    if frame == 'mcdk':
+    if frame == 'utm32':
         grid, hashes = None, None
         probe(args.arnis.resolve(), height_flags({'world_height': world_height}) + ['--block-rect'])
-        cells = mcdk_cells(bounds, args.scale, args.cell_regions)
+        cells = utm32_cells(bounds, args.scale, args.cell_regions)
         if len(cells) > (200000 if mask else args.max_cells):
             raise ValueError(f'{len(cells)} cells exceed --max-cells {args.max_cells}; '
                              'reduce the area or raise the limit')
@@ -447,8 +452,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='action', required=True)
     p = commands.add_parser('plan', help='Plan the cells; fetch bridge corridors but do not generate a world')
-    p.add_argument('--frame', choices=['mcdk', 'meld'], default='mcdk',
-                   help='mcdk: a fixed UTM zone 32 block frame ('
+    p.add_argument('--frame', type=frame_name, choices=['utm32', 'meld'], default='utm32',
+                   help='utm32: a fixed UTM zone 32 block frame ('
                         'X = E - 600000, Z = 6200000 - N), cells as squares of whole region files '
                         '(default); meld: the Web Mercator grid of an external Meld checkout')
     p.add_argument('--meld-source', type=Path, help='External Meld checkout; needed for --frame meld')
@@ -468,7 +473,7 @@ def main():
     p.add_argument('--country', type=Path,
                    help='GeoJSON outline of one country with its territorial waters (e.g. OSM relation 50046 '
                         'for Denmark). Cells abroad are skipped, and chunks on foreign land in border cells '
-                        'are voided after generation. Needs --land-mask and --frame mcdk')
+                        'are voided after generation. Needs --land-mask and --frame utm32')
     p.add_argument('--caves', action='store_true')
     p.add_argument('--signage', choices=['none', 'basic', 'full'], default='full')
     p.add_argument('--hedges', action=argparse.BooleanOptionalAction, default=True,
