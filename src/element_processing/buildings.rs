@@ -3557,49 +3557,104 @@ fn plan_mapped_entrances(
     plans
 }
 
-/// The longest doorstep run outside a door: three steps, one block of descent
-/// each. A deeper drop gets no steps at all rather than a longer flight, which
-/// in front of every downhill door would read as a ramp.
+/// The most stairs straight out from a door, one block of descent each. A
+/// deeper flight would read as a ramp into the street, so it turns along the
+/// facade instead.
 const DOORSTEP_MAX_STEPS: i32 = 3;
 
-/// The cells and heights of the doorstep run outside a door, or `None` when the
-/// run cannot land on the ground.
+/// The most stairs in a flight along the facade.
+const DOORSTEP_SIDE_MAX_STEPS: i32 = 8;
+
+/// How deep the solid column under a threshold may reach when no flight lands.
+const THRESHOLD_MAX_FILL: i32 = 4;
+
+/// The stairs down from a door's threshold, and the way they descend.
+#[derive(Debug, PartialEq)]
+struct Doorstep {
+    stairs: Vec<((i32, i32), i32)>,
+    descent: (i32, i32),
+}
+
+/// A flight from the threshold at `start`, standing at `top`, in direction
+/// `dir`: one block of descent per cell until the ground ahead is at most one
+/// block down. `None` when it needs more than `max` stairs, when `ok` refuses a
+/// cell, or without elevation data.
+fn doorstep_flight(
+    editor: &WorldEditor,
+    start: (i32, i32),
+    dir: (i32, i32),
+    top: i32,
+    max: i32,
+    ok: &dyn Fn((i32, i32), i32) -> bool,
+) -> Option<Vec<((i32, i32), i32)>> {
+    let (mut cell, mut y) = (start, top);
+    let mut stairs = Vec::new();
+    loop {
+        let next = (cell.0 + dir.0, cell.1 + dir.1);
+        if editor.terrain_level(next.0, next.1)? >= y - 1 {
+            return Some(stairs);
+        }
+        if stairs.len() as i32 == max {
+            return None;
+        }
+        y -= 1;
+        if !ok(next, y) {
+            return None;
+        }
+        stairs.push((next, y));
+        cell = next;
+    }
+}
+
+/// The stairs outside a door whose floor is `floor_y`, or `None` when the ground
+/// in front is within a block of the threshold or no flight reaches it.
 ///
 /// A building's floor is `calculate_start_y_offset`, the *highest* terrain level
 /// under its outline, so on a slope the door on the downhill side sits well
-/// above the ground in front of it. The run descends one block per cell and so
-/// bridges at most `DOORSTEP_MAX_STEPS` of that; anything deeper used to get a
-/// truncated flight whose last step stopped two or three blocks up in the air.
-///
-/// The terrain under each step decides, not one probe in front of the door:
-/// what the run has to reach is the ground beneath the steps themselves, and on
-/// a slope that is not the ground at the threshold.
-fn plan_doorstep_steps(
+/// above the ground in front of it. The threshold and every stair stand on a
+/// solid column down to the terrain (see `render_entrance`), so a flight only
+/// has to reach the ground to be walkable. It runs straight out for up to
+/// `DOORSTEP_MAX_STEPS` stairs, else along the facade in one of `sides`, where
+/// the flight that lands soonest wins and `side_ok` must accept every cell.
+fn plan_doorstep(
     editor: &WorldEditor,
     door: (i32, i32),
     normal: (i32, i32),
+    sides: &[(i32, i32)],
     floor_y: i32,
-) -> Option<Vec<((i32, i32), i32)>> {
-    let (nx, nz) = normal;
-    // No elevation data means no drop to bridge.
-    let out_ground = editor.terrain_level(door.0 + nx, door.1 + nz)?;
-    let drop = floor_y - out_ground;
-    // Nothing to bridge below one, and past the reach the run cannot land.
-    if !(1..=DOORSTEP_MAX_STEPS).contains(&drop) {
-        return None;
+    side_ok: &dyn Fn((i32, i32), i32) -> bool,
+) -> Option<Doorstep> {
+    let threshold = (door.0 + normal.0, door.1 + normal.1);
+    if let Some(stairs) = doorstep_flight(
+        editor,
+        threshold,
+        normal,
+        floor_y,
+        DOORSTEP_MAX_STEPS,
+        &|_, _| true,
+    ) {
+        return (!stairs.is_empty()).then_some(Doorstep {
+            stairs,
+            descent: normal,
+        });
     }
-    let mut steps = Vec::with_capacity(drop as usize);
-    for step in 1..=drop {
-        let cell = (door.0 + nx * step, door.1 + nz * step);
-        let step_y = floor_y - step + 1;
-        // The first cell already carries the threshold block, so its step is
-        // never written and only the terrain past it can leave one hanging.
-        if step > 1 && editor.terrain_level(cell.0, cell.1)? < step_y - 1 {
-            return None;
-        }
-        steps.push((cell, step_y));
-    }
-    Some(steps)
+    sides
+        .iter()
+        .filter_map(|&dir| {
+            doorstep_flight(
+                editor,
+                threshold,
+                dir,
+                floor_y,
+                DOORSTEP_SIDE_MAX_STEPS,
+                side_ok,
+            )
+            .map(|stairs| Doorstep {
+                stairs,
+                descent: dir,
+            })
+        })
+        .min_by_key(|d| d.stairs.len())
 }
 
 /// Places a planned entrance: door leaves (overwriting the wall), threshold,
@@ -3609,6 +3664,7 @@ fn render_entrance(
     plan: &EntrancePlan,
     config: &BuildingConfig,
     args: &Args,
+    building_doors: &[(i32, i32)],
 ) {
     let (nx, nz) = plan.normal;
     let facing = facing_for_normal(nx, nz);
@@ -3660,21 +3716,69 @@ fn render_entrance(
             None,
         );
 
-        // Doorstep stairs bridging a terrain drop in front of the door, but
-        // only where the run lands on the ground: see `plan_doorstep_steps`.
+        // Doorstep stairs bridging a terrain drop in front of the door: see
+        // `plan_doorstep`.
         if args.terrain() && config.is_ground_level {
-            if let Some(steps) =
-                plan_doorstep_steps(editor, (*dx, *dz), (nx, nz), config.start_y_offset)
-            {
+            let (floor, off) = (config.start_y_offset, config.abs_terrain_offset);
+            let (tx, tz) = plan.tangent;
+            // The leaves of a double door step down away from each other.
+            let sides: &[(i32, i32)] = match (plan.double, *hinge) {
+                (false, _) => &[(tx, tz), (-tx, -tz)],
+                (true, "left") => &[(-tx, -tz)],
+                (true, _) => &[(tx, tz)],
+            };
+            let occupied = |x: i32, y: i32, z: i32| {
+                editor
+                    .get_block_absolute(x, y + off, z)
+                    .is_some_and(|b| b.id() != AIR.id())
+            };
+            let is_door = |x: i32, z: i32| {
+                editor
+                    .get_block_absolute(x, floor + 1 + off, z)
+                    .is_some_and(|b| b.name().ends_with("_door"))
+            };
+            // Along the facade: a wall without a door behind every cell, nothing
+            // in the way, and a cell clear of the other doors' thresholds.
+            let side_ok = |(cx, cz): (i32, i32), y: i32| {
+                let (wx, wz) = (cx - nx, cz - nz);
+                occupied(wx, floor, wz)
+                    && !is_door(wx, wz)
+                    && (y..=floor + 2).all(|yy| !occupied(cx, yy, cz))
+                    && building_doors
+                        .iter()
+                        .filter(|&&d| d != (*dx, *dz))
+                        .all(|&(ox, oz)| (ox + nx - cx).abs().max((oz + nz - cz).abs()) > 1)
+            };
+            let doorstep = plan_doorstep(editor, (*dx, *dz), (nx, nz), sides, floor, &side_ok);
+
+            // A solid column under the threshold and every stair, so none hangs.
+            let threshold_cell = (dx + nx, dz + nz);
+            let mut columns = vec![(threshold_cell, floor, doorstep.is_some())];
+            if let Some(step) = &doorstep {
+                columns.extend(step.stairs.iter().map(|&(cell, y)| (cell, y, true)));
+            }
+            for ((cx, cz), top, lands) in columns {
+                let Some(ground) = editor.terrain_level(cx, cz) else {
+                    continue;
+                };
+                if !lands && top - ground > THRESHOLD_MAX_FILL {
+                    continue;
+                }
+                for y in ground + 1..top {
+                    editor.set_block_absolute(threshold, cx, y + off, cz, Some(&[AIR]), None);
+                }
+            }
+
+            if let Some(step) = doorstep {
                 let stair_base = get_stair_block_for_material(threshold);
-                // Ascend toward the door: high side of each step faces inward.
-                let stair_facing = match facing_for_normal(-nx, -nz) {
+                // Ascend toward the threshold: the high side faces back along the flight.
+                let stair_facing = match facing_for_normal(-step.descent.0, -step.descent.1) {
                     "north" => StairFacing::North,
                     "south" => StairFacing::South,
                     "east" => StairFacing::East,
                     _ => StairFacing::West,
                 };
-                for ((sx, sz), step_y) in steps {
+                for ((sx, sz), step_y) in step.stairs {
                     let stair = create_stair_with_properties(
                         stair_base,
                         stair_facing,
@@ -8010,8 +8114,14 @@ pub fn generate_buildings(
     }
 
     // Entrance doors overwrite the freshly built wall columns.
+    let building_doors: Vec<(i32, i32)> = entrance_plans
+        .iter()
+        .flat_map(|p| {
+            (0..=i32::from(p.double)).map(move |t| (p.x + p.tangent.0 * t, p.z + p.tangent.1 * t))
+        })
+        .collect();
     for plan in &entrance_plans {
-        render_entrance(editor, plan, &config, args);
+        render_entrance(editor, plan, &config, args, &building_doors);
     }
 
     // Per-building window frame dressing, then shutters/window boxes for the rest
@@ -14399,51 +14509,47 @@ mod doorstep_tests {
     /// The house's north wall. The street in these fixtures runs north of it,
     /// so this is the side `plan_synthetic_entrance` puts the door on.
     const WALL_Z: i32 = 20;
-    /// How far out `render_entrance` can reach: the threshold cell plus the
-    /// steps behind it. Spelled out rather than taken from the constant, so
-    /// this reads the same against the code before and after the fix.
-    const REACH: i32 = 3;
-
-    /// One cell of the doorstep run, read back out of the generated world.
-    #[derive(Debug, PartialEq, Eq)]
-    struct RunCell {
-        /// Distance out from the door, 1 being the threshold cell.
-        step: i32,
-        /// The block found there, if any.
-        block: Option<String>,
-        y: i32,
-        /// Terrain top under it. A block rests on the ground when this is
-        /// exactly one below it; anything lower and it hangs in the air.
-        ground: i32,
-    }
-
-    impl RunCell {
-        fn is_stair(&self) -> bool {
-            self.block
-                .as_deref()
-                .is_some_and(|n| n.ends_with("_stairs"))
-        }
-
-        fn hangs(&self) -> bool {
-            self.ground < self.y - 1
-        }
-    }
+    /// The strip in front of the wall the doorstep may use.
+    const STRIP: i32 = 6;
 
     struct Fixture {
         /// The door column found in the north wall, if the building got one.
         door: Option<(i32, i32)>,
         floor: i32,
-        run: Vec<RunCell>,
+        /// Every stair in front of the wall: x, z, y.
+        stairs: Vec<(i32, i32, i32)>,
+        /// Blocks in front of the wall with air under them, above the ground.
+        hanging: Vec<(i32, i32, i32)>,
+        /// The block on the threshold cell at floor height.
+        threshold: Option<String>,
         /// Glass anywhere in the north wall, which a flattened facade removes.
         wall_has_glass: bool,
     }
 
+    impl Fixture {
+        /// Whether a player on the ground in front can climb to the door: from
+        /// the threshold, each stair a block lower than the last, the lowest one
+        /// standing on the ground.
+        fn reachable(&self, outside_y: i32) -> bool {
+            let mut ys: Vec<i32> = self.stairs.iter().map(|s| s.2).collect();
+            ys.sort_unstable_by(|a, b| b.cmp(a));
+            let mut y = self.floor;
+            for s in ys {
+                if s != y - 1 {
+                    return false;
+                }
+                y = s;
+            }
+            y - outside_y <= 1
+        }
+    }
+
     /// Generates one house over terrain that steps from `outside_y` in front of
     /// the north wall up to `inside_y` under the building, then reads the door
-    /// and the cells of its doorstep run back out of the world.
+    /// and everything in front of the wall back out of the world.
     ///
     /// The floor follows the *highest* terrain under the outline, so
-    /// `inside_y - outside_y` is exactly the drop the run has to bridge.
+    /// `inside_y - outside_y` is exactly the drop the doorstep has to bridge.
     fn build(inside_y: i32, outside_y: i32, presets: bool) -> Fixture {
         let xz = XZBBox::rect_from_min_max(0, 0, MAX_X, MAX_Z).unwrap();
         let road = bitmap_with_rect(&xz, 0, 12, MAX_X, 14);
@@ -14488,24 +14594,29 @@ mod doorstep_tests {
                 .get_block_absolute(x, floor + 1, WALL_Z)
                 .is_some_and(|b| b.name().ends_with("_door"))
         });
-        let run = door
-            .map(|dx| {
-                (1..=REACH)
-                    .map(|step| {
-                        let z = WALL_Z - step;
-                        let y = floor - step + 1;
-                        RunCell {
-                            step,
-                            block: editor
-                                .get_block_absolute(dx, y, z)
-                                .map(|b| b.name().to_string()),
-                            y,
-                            ground: editor.terrain_level(dx, z).unwrap(),
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let name = |x: i32, y: i32, z: i32| {
+            editor
+                .get_block_absolute(x, y, z)
+                .map(|b| b.name().to_string())
+                .filter(|n| n != "air")
+        };
+        let (mut stairs, mut hanging) = (Vec::new(), Vec::new());
+        for x in 0..=MAX_X {
+            for z in WALL_Z - STRIP..WALL_Z {
+                let ground = editor.terrain_level(x, z).unwrap();
+                // Only the drop the doorstep bridges: decorations stand on the ground.
+                for y in ground + 1..=floor {
+                    let Some(n) = name(x, y, z) else { continue };
+                    if n.ends_with("_stairs") {
+                        stairs.push((x, z, y));
+                    }
+                    if y - 1 > ground && name(x, y - 1, z).is_none() {
+                        hanging.push((x, z, y));
+                    }
+                }
+            }
+        }
+        let threshold = door.and_then(|x| name(x, floor, WALL_Z - 1));
         let wall_has_glass = (22..=52).any(|x| {
             (floor..=floor + 8).any(|y| {
                 editor
@@ -14516,7 +14627,9 @@ mod doorstep_tests {
         Fixture {
             door: door.map(|x| (x, WALL_Z)),
             floor,
-            run,
+            stairs,
+            hanging,
+            threshold,
             wall_has_glass,
         }
     }
@@ -14528,63 +14641,70 @@ mod doorstep_tests {
         build(inside_y, outside_y, false)
     }
 
-    /// The owner's report: a building whose floor is six blocks above the
-    /// ground in front of its door used to get a run of steps that stopped in
-    /// mid air, because the run was clamped to three steps and never asked
-    /// whether the third one had landed.
+    /// The owner's first report: a building whose floor is six blocks above the
+    /// ground got a straight run that stopped in mid air. The second: with no
+    /// steps at all, such doors stood high on the wall with nothing to reach
+    /// them. A deep drop now gets stairs along the facade, on solid ground.
     #[test]
-    fn a_drop_the_run_cannot_reach_gets_no_steps() {
+    fn a_deep_drop_gets_stairs_along_the_facade_that_reach_the_ground() {
         let f = plain(6, 0);
         assert!(f.door.is_some(), "the fixture has to produce a door");
-        let hanging: Vec<&RunCell> = f.run.iter().filter(|c| c.is_stair() && c.hangs()).collect();
+        assert!(f.hanging.is_empty(), "blocks left hanging: {:?}", f.hanging);
+        assert_eq!(f.stairs.len(), 5, "{:?}", f.stairs);
         assert!(
-            hanging.is_empty(),
-            "steps left hanging over a 6 block drop: {hanging:?}"
+            f.stairs.iter().all(|s| s.1 == WALL_Z - 1),
+            "the flight runs along the wall, not into the street: {:?}",
+            f.stairs
         );
-        assert!(
-            f.run.iter().all(|c| !c.is_stair()),
-            "a drop this deep must get no steps at all: {:?}",
-            f.run
-        );
+        assert!(f.reachable(0), "{:?}", f.stairs);
     }
 
-    /// The same building one block deeper than the run's three step reach.
+    /// Four blocks: threshold and three stairs straight out, every one on a
+    /// solid column, the lowest on the ground.
     #[test]
-    fn a_drop_one_deeper_than_the_reach_gets_no_steps() {
+    fn a_drop_within_reach_gets_a_straight_solid_flight() {
         let f = plain(4, 0);
-        assert!(
-            f.run.iter().all(|c| !c.is_stair()),
-            "a 4 block drop is past the run's reach: {:?}",
-            f.run
+        let door = f.door.expect("a door");
+        assert!(f.hanging.is_empty(), "blocks left hanging: {:?}", f.hanging);
+        let mut stairs = f.stairs.clone();
+        stairs.sort_unstable();
+        assert_eq!(
+            stairs,
+            vec![
+                (door.0, WALL_Z - 4, 1),
+                (door.0, WALL_Z - 3, 2),
+                (door.0, WALL_Z - 2, 3)
+            ]
         );
+        assert!(f.reachable(0));
     }
 
-    /// The case the steps exist for: the run lands, so it is still built.
+    /// The case the steps were made for keeps its single step, and the
+    /// threshold over the one-block gap now stands on a block too.
     #[test]
-    fn a_drop_the_run_reaches_keeps_its_steps() {
+    fn a_two_block_drop_keeps_one_step_and_a_solid_threshold() {
         let f = plain(2, 0);
-        let steps: Vec<&RunCell> = f.run.iter().filter(|c| c.is_stair()).collect();
-        assert_eq!(steps.len(), 1, "expected one step, got {:?}", f.run);
-        assert!(!steps[0].hangs(), "the step has to rest on the ground");
-        assert_eq!(steps[0].step, 2, "the step sits behind the threshold");
+        let door = f.door.expect("a door");
+        assert_eq!(f.stairs, vec![(door.0, WALL_Z - 2, 1)]);
+        assert!(f.hanging.is_empty(), "blocks left hanging: {:?}", f.hanging);
+        assert!(f.reachable(0));
     }
 
-    /// Flat ground: no drop, so nothing but the threshold, before and after.
+    /// Flat ground: no drop, so nothing but the threshold.
     #[test]
     fn flat_ground_gets_a_threshold_and_no_steps() {
         let f = plain(0, 0);
         assert!(f.door.is_some());
         assert!(
-            f.run.iter().all(|c| !c.is_stair()),
+            f.stairs.is_empty(),
             "flat ground must not get steps: {:?}",
-            f.run
+            f.stairs
         );
-        let threshold = &f.run[0];
-        assert_eq!(threshold.y, f.floor);
         assert!(
-            threshold.block.is_some() && !threshold.hangs(),
-            "the threshold sits on the ground in front of the door: {threshold:?}"
+            f.threshold.is_some(),
+            "the threshold sits in front of the door"
         );
+        assert!(f.hanging.is_empty());
     }
 
     /// Ground higher than the floor: there is nothing to step down to.
@@ -14593,9 +14713,9 @@ mod doorstep_tests {
         let f = plain(0, 3);
         assert!(f.door.is_some());
         assert!(
-            f.run.iter().all(|c| !c.is_stair()),
+            f.stairs.is_empty(),
             "an uphill door must not get steps: {:?}",
-            f.run
+            f.stairs
         );
     }
 
@@ -14627,14 +14747,72 @@ mod doorstep_tests {
             "the fixture has to actually flatten the wall"
         );
         assert!(deep.door.is_some(), "a flattened wall still gets its door");
-        assert!(
-            deep.run.iter().all(|c| !c.is_stair()),
-            "a flattened wall must not get hanging steps: {:?}",
-            deep.run
+        assert!(deep.hanging.is_empty(), "{:?}", deep.hanging);
+        assert!(deep.reachable(0), "{:?}", deep.stairs);
+        assert_eq!(shallow.stairs.len(), 1, "and keeps the step that lands");
+        assert!(shallow.hanging.is_empty());
+    }
+
+    /// Terrain for `plan_doorstep`: floor 6 under the house (z >= 20), and in
+    /// front of it ground that rises eastward by one block every `run` cells.
+    fn sloped_editor(xz: &XZBBox, run: usize) -> WorldEditor<'_> {
+        let mut editor = test_editor(xz);
+        let heights: Vec<Vec<f32>> = (0..WORLD_L)
+            .map(|z| {
+                (0..WORLD_W)
+                    .map(|x| {
+                        if (z as i32) < WALL_Z {
+                            (x / run).min(6) as f32
+                        } else {
+                            6.0
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        editor.set_ground(Arc::new(crate::ground::Ground::new_elevation_test(
+            heights, WORLD_W, WORLD_L,
+        )));
+        editor
+    }
+
+    /// Along a slope the flight takes the uphill side, which lands soonest.
+    #[test]
+    fn the_flight_along_the_facade_heads_uphill() {
+        let xz = XZBBox::rect_from_min_max(0, 0, MAX_X, MAX_Z).unwrap();
+        let editor = sloped_editor(&xz, 4);
+        let sides = [(1, 0), (-1, 0)];
+        // A floor of 8 over ground 2 is past the straight flight's reach.
+        let step = plan_doorstep(&editor, (10, WALL_Z), (0, -1), &sides, 8, &|_, _| true)
+            .expect("a flight");
+        assert_eq!(step.descent, (1, 0));
+        // East the ground rises to 3 at x 12, so four stairs land; west takes seven.
+        assert_eq!(
+            step.stairs,
+            vec![
+                ((11, WALL_Z - 1), 7),
+                ((12, WALL_Z - 1), 6),
+                ((13, WALL_Z - 1), 5),
+                ((14, WALL_Z - 1), 4)
+            ]
         );
-        let steps: Vec<&RunCell> = shallow.run.iter().filter(|c| c.is_stair()).collect();
-        assert_eq!(steps.len(), 1, "and keeps the ones that land");
-        assert!(!steps[0].hangs());
+    }
+
+    /// A side refused by `side_ok` (another door's threshold, a corner, a
+    /// building in the way) leaves the other one, or none.
+    #[test]
+    fn a_refused_side_turns_the_flight_or_drops_it() {
+        let xz = XZBBox::rect_from_min_max(0, 0, MAX_X, MAX_Z).unwrap();
+        let editor = sloped_editor(&xz, 100);
+        let sides = [(1, 0), (-1, 0)];
+        let west_only = |(x, _): (i32, i32), _: i32| x < 30;
+        let step = plan_doorstep(&editor, (30, WALL_Z), (0, -1), &sides, 6, &west_only)
+            .expect("a flight to the west");
+        assert_eq!(step.descent, (-1, 0));
+        assert_eq!(step.stairs.len(), 5);
+        assert!(plan_doorstep(&editor, (30, WALL_Z), (0, -1), &sides, 6, &|_, _| false).is_none());
+        // A drop past the longest flight gets nothing.
+        assert!(plan_doorstep(&editor, (30, WALL_Z), (0, -1), &sides, 20, &|_, _| true).is_none());
     }
 }
 
