@@ -58,8 +58,9 @@ def world_lock(world):
                 fcntl.lockf(f, fcntl.LOCK_UN)
 
 
-def edge_columns(areas):
-    """Union first: shared tile seams cannot become walls. Bounds are inclusive."""
+def edge_columns(areas,removed=()):
+    """Union first: shared tile seams cannot become walls. Bounds are inclusive.
+    `removed` are chunks voided after generation (foreign land), cut from the footprint."""
     rectangles=[]
     for a in areas:
         x,z,X,Z=(a[k] for k in ('min_x','min_z','max_x','max_z'))
@@ -71,6 +72,18 @@ def edge_columns(areas):
     if not rectangles:
         raise ValueError('No completed world areas')
     footprint=unary_union(rectangles)
+    if removed:
+        # Runs along each chunk row first: far fewer shapes to union.
+        rows={}
+        for cx,cz in sorted(set(map(tuple,removed))):rows.setdefault(cz,[]).append(cx)
+        strips=[]
+        for cz,xs in rows.items():
+            start=prev=xs[0]
+            for cx in xs[1:]+[None]:
+                if cx is not None and cx==prev+1:prev=cx;continue
+                strips.append(box(start*16,cz*16,(prev+1)*16,(cz+1)*16))
+                if cx is not None:start=prev=cx
+        footprint=footprint.difference(unary_union(strips))
     shell=prep(footprint.difference(footprint.buffer(-2,join_style=2)))
     boundary=footprint.boundary
     lines=list(boundary.geoms) if hasattr(boundary,'geoms') else [boundary]
@@ -251,7 +264,9 @@ def seal(job):
             backup.mkdir(parents=True)
             state={'phase':'applying','manifest_sha256':digest,'backup':str(backup),'thickness':2}
             atomic_json(state_path,state)
-        backup=Path(state['backup']);regions=edge_columns(read_json(manifest)['areas'])
+        masked=job/'national-mask.json'
+        removed=read_json(masked)['chunks'] if masked.exists() else ()
+        backup=Path(state['backup']);regions=edge_columns(read_json(manifest)['areas'],removed)
         total=0
         for index,((rx,rz),cols) in enumerate(sorted(regions.items()),1):
             path=world/'region'/f'r.{rx}.{rz}.mca';record=backup/(path.name+'.json')

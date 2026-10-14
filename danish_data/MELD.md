@@ -54,6 +54,15 @@ generating a world. Bounding boxes are **south, west, north, east** in WGS84.
   `DATAFORSYNINGEN_TOKEN` in the credentials file; `--no-hedges` plans without them.
 - `--max-cells` limits retained cells (default 1,000, maximum 20,000).
 - `--land-mask FILE` skips open-sea cells. See [ocean filtering](OCEAN.md).
+- `--country FILE` keeps the map to one country. The file is a GeoJSON outline
+  that includes the territorial waters, such as the OpenStreetMap boundary of
+  Denmark (relation 50046).
+  - Cells with none of the country's land within the coast buffer are skipped,
+    unless a bridge or `--keep-bbox` keeps them.
+  - In cells that reach across the border, chunks on another country's land are
+    removed after generation. The map then follows the land border to within
+    16 blocks, and the bedrock edge is sealed along the cut.
+  - Needs `--land-mask` and the default `--frame mcdk`.
 
 Each live Danish data request must cover at most 10 km², including the cell's
 data margin. Use smaller cells if a plan exceeds this limit. Cells include

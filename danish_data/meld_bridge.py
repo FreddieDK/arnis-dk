@@ -16,8 +16,9 @@ import types
 # 2: older runners must not generate skipped_ocean cells. 3: older runners
 # would ignore world_height and create the world with the extended height.
 # 4: older runners would leave out the hedges. 5: older runners would plant
-# minecraftdanmark.dk cells in a Web Mercator world.
-SCHEMA = 5
+# minecraftdanmark.dk cells in a Web Mercator world. 6: older runners would
+# leave another country's land standing in border cells.
+SCHEMA = 6
 WORLD_NAME = 'Arnis-DK Meld'
 
 
@@ -134,6 +135,16 @@ def plan(args):
     if not math.isfinite(args.coast_buffer_m) or not 0 <= args.coast_buffer_m <= 10000:
         raise ValueError('Coast buffer must be between 0 and 10000 metres')
     keep_areas = [bbox(value) for value in args.keep_bbox]
+    country_path = getattr(args, 'country', None)
+    country_record = input_record(country_path) if country_path else None
+    country = None
+    if country_record:
+        if not mask:
+            raise ValueError('--country needs --land-mask, which tells land from sea')
+        if getattr(args, 'frame', 'mcdk') != 'mcdk':
+            raise ValueError('--country needs --frame mcdk')
+        from national_mask import CountryMask
+        country = CountryMask(country_record['path'], mask)
     bridge_document = None
     bridges = None
     if mask:
@@ -180,6 +191,12 @@ def plan(args):
         bridge_corridor = bool(bridges and bridges.intersects(data_bbox))
         ocean = bool(mask and not intersects_keep and not bridge_corridor
                      and mask.is_open_sea(data_bbox, args.coast_buffer_m))
+        abroad = foreign = False
+        if country and not ocean:
+            inside, own, foreign = country.classify(cell['rect'], args.scale, args.coast_buffer_m)
+            # Only the country's own land and coast, its keep areas and its bridges.
+            abroad = not inside or not (own or intersects_keep or bridge_corridor)
+        ocean = ocean or abroad
         if ocean:
             pass  # No Danish data request or coverage requirement for skipped sea cells.
         elif supplement:
@@ -191,6 +208,10 @@ def plan(args):
                 'data_bbox': data_bbox, 'status': 'skipped_ocean' if ocean else 'pending'}
         if 'rect' in cell:
             task['rect'] = cell['rect']
+        if abroad:
+            task['skip_reason'] = 'abroad'
+        elif foreign:
+            task['foreign_land'] = True
         tasks.append(task)
     if not tasks:
         raise ValueError('Meld returned an empty plan')
@@ -211,13 +232,18 @@ def plan(args):
                 'land_mask': mask_record, 'coast_buffer_m': args.coast_buffer_m,
                 'keep_bbox': keep_areas,
                 'osm_file': input_record(args.osm_file) if args.osm_file else None,
+                'country': country_record,
                 'world_name': WORLD_NAME, 'cells': tasks, 'seal_void_edges': True}
     job.mkdir(parents=True)
     if bridge_document is not None:
         atomic_json(job / 'bridge-mask.json', bridge_document)
         document['bridge_mask'] = input_record(job / 'bridge-mask.json')
     atomic_json(job / 'plan.json', document)
-    print(f'Planned {kept} cells; skipped {len(tasks)-kept} open-sea cells (void).')
+    abroad_count = sum(c.get('skip_reason') == 'abroad' for c in tasks)
+    border = sum(bool(c.get('foreign_land')) for c in tasks)
+    print(f'Planned {kept} cells; skipped {len(tasks)-kept-abroad_count} open-sea cells (void).')
+    if country_record:
+        print(f'Country: {abroad_count} cells abroad skipped; {border} border cells lose their foreign land.')
     print('Bridge snapshot pinned when using a land mask; no world generated.')
     print(f'Run: python danish_data/meld_bridge.py run --job "{job}"')
 
@@ -238,13 +264,13 @@ def job_lock(job):
 
 
 def verify_inputs(document):
-    if document.get('schema') not in (1, 2, 3, 4, SCHEMA):
+    if document.get('schema') not in (1, 2, 3, 4, 5, SCHEMA):
         raise ValueError('Unsupported job format')
     if document.get('meld_source'):
         _, hashes = external_meld(document['meld_source'])
         if hashes != document['meld_hashes']:
             raise ValueError('External Meld grid changed; use the original checkout to resume')
-    for key in ['arnis', 'danish_buildings', 'osm_file', 'land_mask', 'bridge_mask']:
+    for key in ['arnis', 'danish_buildings', 'osm_file', 'land_mask', 'bridge_mask', 'country']:
         record = document.get(key)
         if record and digest(record['path']) != record['sha256']:
             raise ValueError(f'{key} changed since planning; create a new job')
@@ -320,6 +346,24 @@ def validate_result(world, cell, coverage=None):
         raise ValueError('World manifest does not cover the generated cell')
 
 
+def void_foreign_land(document, job, world, cell, cache):
+    """Remove the chunks of a border cell that lie on another country's land, and
+    note them for the void-edge seal."""
+    if 'mask' not in cache:
+        from national_mask import CountryMask
+        from ocean_mask import LandMask
+        cache['mask'] = CountryMask(document['country']['path'], LandMask(document['land_mask']['path']))
+    from national_mask import remove_chunks
+    chunks = cache['mask'].foreign_chunks(cell['rect'], document['scale'])
+    path = job / 'national-mask.json'
+    noted = read_json(path) if path.exists() else {'chunks': []}
+    known = {tuple(c) for c in noted['chunks']}
+    noted['chunks'] += [list(c) for c in chunks if tuple(c) not in known]
+    # Noted before removal: an interrupted removal is finished by the next run.
+    atomic_json(path, noted)
+    cell['masked_chunks'] = remove_chunks(world, chunks) + cell.get('masked_chunks', 0)
+
+
 def run(args):
     from fetch import load_key
     job = args.job.resolve()
@@ -359,6 +403,7 @@ def run(args):
         for name in ['DATAFORDELER_API_KEY', 'DATAFORSYNINGEN_TOKEN', 'ARNIS_DK_BUILDINGS', 'MAPILLARY_TOKEN']:
             env.pop(name, None)
         env['RAYON_NUM_THREADS'] = str(document['threads'])
+        mask_cache = {}
         for cell in cells[:args.limit]:
             folder = job / 'cells' / cell['id']
             folder.mkdir(parents=True, exist_ok=True)
@@ -374,6 +419,8 @@ def run(args):
                 if result.returncode:
                     raise ValueError(f'Arnis failed with exit code {result.returncode}; see cell log')
                 validate_result(world, cell)
+                if cell.get('foreign_land'):
+                    void_foreign_land(document, job, world, cell, mask_cache)
                 cell['status'] = 'complete'
             except BaseException:
                 cell['status'] = 'failed'
@@ -418,6 +465,10 @@ def main():
     p.add_argument('--coast-buffer-m', type=float, default=2000, help='Retain a coastal sea strip (default 2000 metres, plus cell padding)')
     p.add_argument('--bridge-mask', type=Path, help='Prepared bridge snapshot; otherwise fetch OSM bridge corridors when a land mask is used')
     p.add_argument('--keep-bbox', action='append', default=[], help='Always generate this south,west,north,east area, e.g. a bridge; repeatable')
+    p.add_argument('--country', type=Path,
+                   help='GeoJSON outline of one country with its territorial waters (e.g. OSM relation 50046 '
+                        'for Denmark). Cells abroad are skipped, and chunks on foreign land in border cells '
+                        'are voided after generation. Needs --land-mask and --frame mcdk')
     p.add_argument('--caves', action='store_true')
     p.add_argument('--signage', choices=['none', 'basic', 'full'], default='full')
     p.add_argument('--hedges', action=argparse.BooleanOptionalAction, default=True,
