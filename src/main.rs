@@ -529,7 +529,7 @@ fn run_cli() {
             data
         } else {
             retrieve_data::fetch_osm_data(
-                effective_bbox,
+                projection::ProjectionSpec::from_args(&args).fetch_bbox(&effective_bbox),
                 args.debug,
                 args.downloader.as_str(),
                 args.save_json_file.as_deref(),

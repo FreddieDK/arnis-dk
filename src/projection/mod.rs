@@ -166,6 +166,18 @@ impl ProjectionSpec {
         }
     }
 
+    /// The lat/lon bbox to fetch OSM for: the area plus the clip margin, so a
+    /// feature standing just past the edge still reaches in.
+    pub fn fetch_bbox(&self, llbbox: &LLBBox) -> LLBBox {
+        if self.clip_pad <= 0 || self.kind == ProjectionKind::Local {
+            return *llbbox;
+        }
+        let Ok((_, rect)) = self.transformer(llbbox) else {
+            return *llbbox;
+        };
+        llbbox_for_rect(&self.frame(llbbox), &self.clip_bbox(&rect)).unwrap_or(*llbbox)
+    }
+
     pub fn clip_bbox(&self, xzbbox: &XZBBox) -> XZBBox {
         if self.clip_pad <= 0 {
             return xzbbox.clone();
@@ -611,6 +623,29 @@ mod tests {
         assert_eq!(snap_edge(15.4, true), 16);
         assert_eq!(snap_edge(-3.7, false), -4);
         assert_eq!(snap_edge(-3.7, true), -3);
+    }
+
+    #[test]
+    fn a_one_world_fetch_covers_the_clip_margin() {
+        let spec = ProjectionSpec {
+            kind: ProjectionKind::Mcdk,
+            origin: None,
+            scale: 1.0,
+            clip_pad: 64,
+            rect: Some([48128, 57344, 49151, 58367]),
+        };
+        let area = llbbox_for_rect(
+            &mcdk(1.0),
+            &XZBBox::rect_from_min_max(48128, 57344, 49151, 58367).unwrap(),
+        )
+        .unwrap();
+        let fetch = spec.fetch_bbox(&area);
+        for (x, z) in [(48064.0, 57280.0), (49216.0, 58432.0)] {
+            let (lat, lon) = mcdk(1.0).inverse(x, z);
+            assert!(lat >= fetch.min().lat() && lat <= fetch.max().lat());
+            assert!(lon >= fetch.min().lng() && lon <= fetch.max().lng());
+        }
+        assert_eq!(ProjectionSpec::local(1.0).fetch_bbox(&area), area);
     }
 
     #[test]

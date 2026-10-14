@@ -828,6 +828,13 @@ fn way_touches_rect(nodes: &[ProcessedNode], rect: &XZBBox) -> bool {
         && min_z <= rect.max_z()
 }
 
+/// Point features wide enough to reach into the area from the clip margin.
+/// Others there are left out, so nothing is placed twice along a seam.
+fn reaches_across_the_edge(tags: &HashMap<String, String>) -> bool {
+    tags.get("power").is_some_and(|p| p == "generator")
+        && tags.get("generator:source").is_some_and(|s| s == "wind")
+}
+
 pub fn parse_osm_data(
     osm_data: OsmData,
     bbox: LLBBox,
@@ -932,8 +939,11 @@ pub fn parse_osm_data(
             nodes_map.insert(element.id, processed.clone());
 
             // Only add tagged nodes to processed_elements if they're within or near the bbox
-            // This significantly improves performance by filtering out distant nodes
-            if !processed.tags.is_empty() && xzbbox.contains(&xzpoint) {
+            // This significantly improves performance by filtering out distant nodes.
+            // A wind turbine just past the area edge still turns its rotor over it.
+            let keep = xzbbox.contains(&xzpoint)
+                || (clip_bbox.contains(&xzpoint) && reaches_across_the_edge(&processed.tags));
+            if !processed.tags.is_empty() && keep {
                 processed_elements.push(ProcessedElement::Node(processed));
             }
         }
@@ -2544,6 +2554,53 @@ mod osm_xml_tests {
             !crate::floodfill::flood_fill_area(&coords, None).is_empty(),
             "the ring fills, instead of leaving an outline"
         );
+    }
+
+    /// A turbine just past a One World area's edge turns its rotor over it,
+    /// so it is kept; a bench there could only be placed twice along the seam.
+    #[test]
+    fn only_wide_point_features_are_kept_from_the_clip_margin() {
+        use crate::projection::{llbbox_for_rect, McdkProjection, ProjectionKind, ProjectionSpec};
+        let rect = [48128, 57344, 49151, 58367];
+        let spec = ProjectionSpec {
+            kind: ProjectionKind::Mcdk,
+            origin: None,
+            scale: 1.0,
+            clip_pad: 64,
+            rect: Some(rect),
+        };
+        let proj = McdkProjection::new(1.0);
+        let node = |id: u64, x: f64, z: f64, tags: &str| {
+            let (lat, lon) = proj.inverse(x + 0.5, z + 0.5);
+            format!(r#"<node id="{id}" lat="{lat}" lon="{lon}">{tags}</node>"#)
+        };
+        let turbine = r#"<tag k="power" v="generator"/><tag k="generator:source" v="wind"/>"#;
+        let bench = r#"<tag k="amenity" v="bench"/>"#;
+        let xml = format!(
+            "<osm version=\"0.6\">{}{}{}{}</osm>",
+            node(1, 48100.0, 57800.0, turbine),
+            node(2, 48100.0, 57810.0, bench),
+            node(3, 48500.0, 57800.0, bench),
+            node(4, 48000.0, 57800.0, turbine),
+        );
+        let (data, _) = parse(&xml);
+        let frame = spec.frame(&LLBBox::new(55.0, 11.0, 55.1, 11.1).unwrap());
+        let area = llbbox_for_rect(
+            &frame,
+            &XZBBox::rect_from_min_max(rect[0], rect[1], rect[2], rect[3]).unwrap(),
+        )
+        .unwrap();
+        let (elements, _, _, _) = parse_osm_data(data, area, false, &spec);
+        let mut kept: Vec<u64> = elements
+            .iter()
+            .filter_map(|e| match e {
+                ProcessedElement::Node(n) => Some(n.id),
+                _ => None,
+            })
+            .collect();
+        kept.sort_unstable();
+        // 4 stands 128 blocks out, past the margin.
+        assert_eq!(kept, vec![1, 3]);
     }
 
     #[test]
