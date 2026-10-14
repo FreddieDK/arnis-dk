@@ -15,8 +15,9 @@ import types
 
 # 2: older runners must not generate skipped_ocean cells. 3: older runners
 # would ignore world_height and create the world with the extended height.
-# 4: older runners would leave out the hedges.
-SCHEMA = 4
+# 4: older runners would leave out the hedges. 5: older runners would plant
+# minecraftdanmark.dk cells in a Web Mercator world.
+SCHEMA = 5
 WORLD_NAME = 'Arnis-DK Meld'
 
 
@@ -83,6 +84,23 @@ def height_flags(document):
     return ['--one-world-height', 'vanilla'] if document.get('world_height') == 'vanilla' else []
 
 
+def frame_flags(cell):
+    """Cells planned on the minecraftdanmark.dk grid are exact block rectangles."""
+    rect = cell.get('rect')
+    if not rect:
+        return []
+    return ['--projection', 'mcdk', '--block-rect', ','.join(map(str, rect))]
+
+
+def mcdk_cells(bounds, scale, regions):
+    """Cells as squares of whole region files in the minecraftdanmark.dk frame
+    (UTM zone 32, X = E - 600000, Z = 6200000 - N), with the lat/lon bbox around each."""
+    import mcdk
+    return [{'cell_key': f'mcdk {rect[0]},{rect[1]}', 'rect': rect,
+             'bbox': dict(zip(['south', 'west', 'north', 'east'], mcdk.rect_bbox(rect, scale)))}
+            for rect in mcdk.cells(bounds, scale, regions)]
+
+
 def probe(executable, extra=()):
     result = subprocess.run([str(executable), '--help'], capture_output=True, text=True,
                             encoding='utf-8', errors='replace', timeout=30, check=True)
@@ -126,19 +144,36 @@ def plan(args):
     world_height = getattr(args, 'world_height', 'vanilla')
     if world_height not in ('vanilla', 'earth'):
         raise ValueError('World height must be vanilla or earth')
-    grid, hashes = external_meld(args.meld_source)
-    probe(args.arnis.resolve(), height_flags({'world_height': world_height}))
+    frame = getattr(args, 'frame', 'mcdk')
+    if frame not in ('mcdk', 'meld'):
+        raise ValueError('Frame must be mcdk or meld')
     s, w, n, e = bounds
-    origin = {'lat': s, 'lon': w}
-    cells = grid.cells_for_bbox(dict(south=s, west=w, north=n, east=e), origin,
-                               args.scale, args.cell_regions,
-                               max_cells=200000 if mask else args.max_cells)
+    if frame == 'mcdk':
+        grid, hashes = None, None
+        probe(args.arnis.resolve(), height_flags({'world_height': world_height}) + ['--block-rect'])
+        cells = mcdk_cells(bounds, args.scale, args.cell_regions)
+        if len(cells) > (200000 if mask else args.max_cells):
+            raise ValueError(f'{len(cells)} cells exceed --max-cells {args.max_cells}; '
+                             'reduce the area or raise the limit')
+    else:
+        if not getattr(args, 'meld_source', None):
+            raise ValueError('--frame meld needs --meld-source')
+        grid, hashes = external_meld(args.meld_source)
+        probe(args.arnis.resolve(), height_flags({'world_height': world_height}))
+        origin = {'lat': s, 'lon': w}
+        cells = grid.cells_for_bbox(dict(south=s, west=w, north=n, east=e), origin,
+                                   args.scale, args.cell_regions,
+                                   max_cells=200000 if mask else args.max_cells)
     supplement = input_record(args.danish_buildings) if args.danish_buildings else None
     coverage = read_json(supplement['path'])['arnis_dk']['bbox'] if supplement else None
     tasks = []
     for i, cell in enumerate(cells):
         b = cell['bbox']
-        area = [max(s, b['south']), max(w, b['west']), min(n, b['north']), min(e, b['east'])]
+        if 'rect' in cell:
+            # The rectangle is the area; its bbox reaches a little past the request.
+            area = [b['south'], b['west'], b['north'], b['east']]
+        else:
+            area = [max(s, b['south']), max(w, b['west']), min(n, b['north']), min(e, b['east'])]
         data_bbox = padded(area, args.scale)
         intersects_keep = any(area[0] <= k[2] and area[2] >= k[0] and area[1] <= k[3]
                               and area[3] >= k[1] for k in keep_areas)
@@ -152,8 +187,11 @@ def plan(args):
                 raise ValueError('Prepared Danish supplement must cover all cells INCLUDING padding')
         else:
             download_bounds(','.join(map(str, data_bbox)))  # retains the 10 km2 safety limit
-        tasks.append({'id': f'{i:05d}', 'meld_cell': cell['cell_key'], 'bbox': area,
-                      'data_bbox': data_bbox, 'status': 'skipped_ocean' if ocean else 'pending'})
+        task = {'id': f'{i:05d}', 'meld_cell': cell['cell_key'], 'bbox': area,
+                'data_bbox': data_bbox, 'status': 'skipped_ocean' if ocean else 'pending'}
+        if 'rect' in cell:
+            task['rect'] = cell['rect']
+        tasks.append(task)
     if not tasks:
         raise ValueError('Meld returned an empty plan')
     kept = sum(c['status'] != 'skipped_ocean' for c in tasks)
@@ -162,7 +200,9 @@ def plan(args):
     if mask_record and digest(mask_record['path']) != mask_record['sha256']:
         raise ValueError('Land mask changed while planning; retry with an unchanged file')
     document = {'schema': SCHEMA, 'snapshot': datetime.now(timezone.utc).isoformat(),
-                'meld_source': str(args.meld_source.resolve()), 'meld_hashes': hashes,
+                'frame': frame,
+                'meld_source': str(args.meld_source.resolve()) if grid else None,
+                'meld_hashes': hashes,
                 'arnis': input_record(args.arnis), 'bbox': bounds, 'scale': args.scale,
                 'threads': args.threads, 'caves': args.caves, 'signage': args.signage,
                 'world_height': world_height,
@@ -198,11 +238,12 @@ def job_lock(job):
 
 
 def verify_inputs(document):
-    if document.get('schema') not in (1, 2, 3, SCHEMA):
+    if document.get('schema') not in (1, 2, 3, 4, SCHEMA):
         raise ValueError('Unsupported job format')
-    _, hashes = external_meld(document['meld_source'])
-    if hashes != document['meld_hashes']:
-        raise ValueError('External Meld grid changed; use the original checkout to resume')
+    if document.get('meld_source'):
+        _, hashes = external_meld(document['meld_source'])
+        if hashes != document['meld_hashes']:
+            raise ValueError('External Meld grid changed; use the original checkout to resume')
     for key in ['arnis', 'danish_buildings', 'osm_file', 'land_mask', 'bridge_mask']:
         record = document.get(key)
         if record and digest(record['path']) != record['sha256']:
@@ -241,7 +282,7 @@ def command(document, cell, job, supplement):
            '--scale', str(document['scale']), '--mode', 'geo-terrain',
            '--world-type', 'void',
            '--signage', document['signage'], '--map-item=false',
-           '--danish-buildings', str(supplement)] + height_flags(document)
+           '--danish-buildings', str(supplement)] + height_flags(document) + frame_flags(cell)
     if document.get('osm_file'):
         cmd += ['--file', document['osm_file']['path']]
     if document['caves']:
@@ -250,6 +291,7 @@ def command(document, cell, job, supplement):
 
 
 def world_coverage(world):
+    """The recorded areas, as lat/lon boxes and as block rectangles."""
     from shapely.geometry import box
     from shapely.strtree import STRtree
     if not (world / 'level.dat').is_file():
@@ -257,17 +299,24 @@ def world_coverage(world):
     manifest = read_json(world / 'arnis_one_world.json')
     if not manifest.get('areas'):
         raise ValueError('Arnis did not record a completed area')
-    return STRtree([box(a['min_lon'], a['min_lat'], a['max_lon'], a['max_lat'])
-                    for a in manifest['areas']])
+    areas = manifest['areas']
+    return {'bbox': STRtree([box(a['min_lon'], a['min_lat'], a['max_lon'], a['max_lat'])
+                             for a in areas]),
+            'rect': STRtree([box(a['min_x'], a['min_z'], a['max_x'] + 1, a['max_z'] + 1)
+                             for a in areas if 'min_x' in a])}
 
 
 def validate_result(world, cell, coverage=None):
     from shapely.geometry import box
     if coverage is None:
         coverage = world_coverage(world)
-    s, w, n, e = cell['bbox']
-    requested = box(w + 1e-8, s + 1e-8, e - 1e-8, n - 1e-8)
-    if not len(coverage.query(requested, predicate='covered_by')):
+    if cell.get('rect'):
+        x0, z0, x1, z1 = cell['rect']
+        tree, requested = coverage['rect'], box(x0 + .5, z0 + .5, x1 + .5, z1 + .5)
+    else:
+        s, w, n, e = cell['bbox']
+        tree, requested = coverage['bbox'], box(w + 1e-8, s + 1e-8, e - 1e-8, n - 1e-8)
+    if not len(tree.query(requested, predicate='covered_by')):
         raise ValueError('World manifest does not cover the generated cell')
 
 
@@ -350,8 +399,12 @@ def finalize_edges(document, job):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='action', required=True)
-    p = commands.add_parser('plan', help='Plan using Meld; fetch bridge corridors but do not generate a world')
-    p.add_argument('--meld-source', type=Path, required=True)
+    p = commands.add_parser('plan', help='Plan the cells; fetch bridge corridors but do not generate a world')
+    p.add_argument('--frame', choices=['mcdk', 'meld'], default='mcdk',
+                   help='mcdk: the coordinates of the classic minecraftdanmark.dk map (UTM zone 32, '
+                        'X = E - 600000, Z = 6200000 - N), cells as squares of whole region files '
+                        '(default); meld: the Web Mercator grid of an external Meld checkout')
+    p.add_argument('--meld-source', type=Path, help='External Meld checkout; needed for --frame meld')
     p.add_argument('--arnis', type=Path, required=True)
     p.add_argument('--job', type=Path, required=True)
     p.add_argument('--bbox', required=True)

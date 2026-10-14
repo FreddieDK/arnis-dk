@@ -1,5 +1,7 @@
+pub mod utm;
 pub mod web_mercator;
 
+pub use utm::McdkProjection;
 pub use web_mercator::WebMercatorProjection;
 
 use crate::coordinate_system::cartesian::XZBBox;
@@ -25,6 +27,9 @@ pub trait Projection {
 pub enum ProjectionKind {
     /// Web Mercator (EPSG:3857-like) projection with a local origin offset.
     WebMercator,
+    /// UTM zone 32N in the minecraftdanmark.dk frame (`X = E - 600000`,
+    /// `Z = 6200000 - N`). One World only.
+    Mcdk,
     /// Simple local coordinate system (no geographic projection).
     Local,
 }
@@ -33,6 +38,7 @@ impl fmt::Display for ProjectionKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ProjectionKind::WebMercator => write!(f, "web_mercator"),
+            ProjectionKind::Mcdk => write!(f, "mcdk"),
             ProjectionKind::Local => write!(f, "local"),
         }
     }
@@ -44,8 +50,34 @@ impl FromStr for ProjectionKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "web_mercator" | "webmercator" | "mercator" => Ok(ProjectionKind::WebMercator),
+            "mcdk" | "utm32_mcdk" | "minecraftdanmark" => Ok(ProjectionKind::Mcdk),
             "local" => Ok(ProjectionKind::Local),
             other => Err(format!("unknown projection kind: '{other}'")),
+        }
+    }
+}
+
+/// The block frame of a projected run.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WorldProjection {
+    WebMercator(WebMercatorProjection),
+    Mcdk(McdkProjection),
+}
+
+impl WorldProjection {
+    /// Block `(x, z)` as fractions; north is -Z.
+    pub fn forward(&self, lat: f64, lon: f64) -> (f64, f64) {
+        match self {
+            Self::WebMercator(p) => (p.x_for_lon(lon), p.z_for_lat(lat)),
+            Self::Mcdk(p) => p.forward(lat, lon),
+        }
+    }
+
+    /// Latitude and longitude of a block position.
+    pub fn inverse(&self, x: f64, z: f64) -> (f64, f64) {
+        match self {
+            Self::WebMercator(p) => (p.lat_for_z(z), p.lon_for_x(x)),
+            Self::Mcdk(p) => p.inverse(x, z),
         }
     }
 }
@@ -61,6 +93,11 @@ pub struct ProjectionSpec {
     /// Blocks of geometry kept past the world edge when clipping, so elements
     /// crossing it are built whole.
     pub clip_pad: i32,
+    /// The run's block rectangle `[min_x, min_z, max_x, max_z]` when it is
+    /// fixed in blocks. UTM bends parallels and meridians, so a lat/lon bbox
+    /// and a block rectangle are different areas there and the rectangle is
+    /// the one that counts. Web Mercator derives it from the bbox as before.
+    pub rect: Option<[i32; 4]>,
 }
 
 impl ProjectionSpec {
@@ -71,22 +108,25 @@ impl ProjectionSpec {
             origin: None,
             scale,
             clip_pad: 0,
+            rect: None,
         }
     }
 
     pub fn from_args(args: &crate::args::Args) -> Self {
         match &args.one_world_run {
             Some(run) => Self {
-                kind: ProjectionKind::WebMercator,
+                kind: run.projection,
                 origin: Some((run.origin_lat, run.origin_lon)),
                 scale: args.scale,
                 clip_pad: crate::one_world::CLIP_PAD_BLOCKS,
+                rect: Some(run.rect),
             },
             None => Self {
                 kind: args.projection,
                 origin: None,
                 scale: args.scale,
                 clip_pad: 0,
+                rect: None,
             },
         }
     }
@@ -101,11 +141,27 @@ impl ProjectionSpec {
         WebMercatorProjection::new(lat, lon, self.scale)
     }
 
+    /// The frame of a projected run.
+    pub fn frame(&self, llbbox: &LLBBox) -> WorldProjection {
+        match self.kind {
+            ProjectionKind::Mcdk => WorldProjection::Mcdk(McdkProjection::new(self.scale)),
+            _ => WorldProjection::WebMercator(self.mercator(llbbox)),
+        }
+    }
+
     pub fn transformer(&self, llbbox: &LLBBox) -> Result<(CoordTransformer, XZBBox), String> {
         match self.kind {
             ProjectionKind::Local => CoordTransformer::llbbox_to_xzbbox(llbbox, self.scale),
             ProjectionKind::WebMercator => {
                 CoordTransformer::with_projection(llbbox, self.scale, self.mercator(llbbox))
+            }
+            ProjectionKind::Mcdk => {
+                let frame = self.frame(llbbox);
+                let rect = match self.rect {
+                    Some([x0, z0, x1, z1]) => XZBBox::rect_from_min_max(x0, z0, x1, z1)?,
+                    None => block_bounds(&frame, llbbox)?,
+                };
+                CoordTransformer::with_frame(llbbox, frame, rect)
             }
         }
     }
@@ -155,17 +211,103 @@ pub(crate) fn snap_edge(v: f64, ceil: bool) -> i32 {
     }
 }
 
-/// Snaps a bbox outward to whole chunks in a Web Mercator frame. Returns the
-/// inclusive block rectangle and the lat/lon bbox covering exactly that
-/// rectangle (the axes are separable, so the two describe the same area).
+/// Points sampled along each edge in a frame that bends lines: a 100 km edge
+/// is then traced to a few centimetres.
+const EDGE_SAMPLES: usize = 128;
+
+/// About a centimetre, which covers that chord error.
+const OUTLINE_MARGIN_DEG: f64 = 1e-7;
+
+/// West, east, north and south block edges of a lat/lon bbox. In UTM they
+/// bound the bbox's slightly curved outline.
+fn projected_edges(proj: &WorldProjection, llbbox: &LLBBox) -> [f64; 4] {
+    let (s, w, n, e) = (
+        llbbox.min().lat(),
+        llbbox.min().lng(),
+        llbbox.max().lat(),
+        llbbox.max().lng(),
+    );
+    if let WorldProjection::WebMercator(p) = proj {
+        return [
+            p.x_for_lon(w),
+            p.x_for_lon(e),
+            p.z_for_lat(n),
+            p.z_for_lat(s),
+        ];
+    }
+    let mut edges = [
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    ];
+    for i in 0..=EDGE_SAMPLES {
+        let t = i as f64 / EDGE_SAMPLES as f64;
+        let (lat, lon) = (s + (n - s) * t, w + (e - w) * t);
+        for (la, lo) in [(lat, w), (lat, e), (s, lon), (n, lon)] {
+            let (x, z) = proj.forward(la, lo);
+            edges = [
+                edges[0].min(x),
+                edges[1].max(x),
+                edges[2].min(z),
+                edges[3].max(z),
+            ];
+        }
+    }
+    edges
+}
+
+/// The blocks a lat/lon bbox touches, not snapped to chunks.
+fn block_bounds(proj: &WorldProjection, llbbox: &LLBBox) -> Result<XZBBox, String> {
+    let [x_w, x_e, z_n, z_s] = projected_edges(proj, llbbox);
+    check_projected_edges([x_w, x_e, z_n, z_s])?;
+    let x_min = snap_edge(x_w, false);
+    let z_min = snap_edge(z_n, false);
+    XZBBox::rect_from_min_max(
+        x_min,
+        z_min,
+        (snap_edge(x_e, true) - 1).max(x_min),
+        (snap_edge(z_s, true) - 1).max(z_min),
+    )
+}
+
+/// The lat/lon bbox around the block-space rectangle from `(x0, z0)` to
+/// `(x1, z1)`, grown by `margin` degrees.
+pub fn enclosing_llbbox(
+    proj: &WorldProjection,
+    (x0, z0): (f64, f64),
+    (x1, z1): (f64, f64),
+    margin: f64,
+) -> Result<LLBBox, String> {
+    let (mut s, mut w, mut n, mut e) = (
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    );
+    for i in 0..=EDGE_SAMPLES {
+        let t = i as f64 / EDGE_SAMPLES as f64;
+        let (x, z) = (x0 + (x1 - x0) * t, z0 + (z1 - z0) * t);
+        for (bx, bz) in [(x0, z), (x1, z), (x, z0), (x, z1)] {
+            let (lat, lon) = proj.inverse(bx, bz);
+            s = s.min(lat);
+            n = n.max(lat);
+            w = w.min(lon);
+            e = e.max(lon);
+        }
+    }
+    LLBBox::new(s - margin, w - margin, n + margin, e + margin)
+}
+
+/// Snaps a bbox outward to whole chunks. Returns the inclusive block rectangle
+/// and the lat/lon bbox covering it. In Web Mercator the axes are separable,
+/// so the two describe the same area; in UTM the bbox reaches a little past
+/// the rectangle's corners.
 pub fn snap_bbox_to_chunks(
-    proj: &WebMercatorProjection,
+    proj: &WorldProjection,
     llbbox: &LLBBox,
 ) -> Result<(XZBBox, LLBBox), String> {
-    let x_w = proj.x_for_lon(llbbox.min().lng());
-    let x_e = proj.x_for_lon(llbbox.max().lng());
-    let z_n = proj.z_for_lat(llbbox.max().lat());
-    let z_s = proj.z_for_lat(llbbox.min().lat());
+    let [x_w, x_e, z_n, z_s] = projected_edges(proj, llbbox);
     check_projected_edges([x_w, x_e, z_n, z_s])?;
 
     let floor_chunk = |v: f64| (snap_edge(v, false) as f64 / CHUNK_BLOCKS as f64).floor() as i32;
@@ -194,32 +336,64 @@ pub fn snap_bbox_to_chunks(
     ])?;
 
     let xzbbox = XZBBox::rect_from_min_max(min_x, min_z, max_x_excl - 1, max_z_excl - 1)?;
-    let effective = LLBBox::new(
-        proj.lat_for_z(max_z_excl as f64),
-        proj.lon_for_x(min_x as f64),
-        proj.lat_for_z(min_z as f64),
-        proj.lon_for_x(max_x_excl as f64),
-    )?;
+    let effective = llbbox_for_rect(proj, &xzbbox)?;
     Ok((xzbbox, effective))
 }
 
+/// Grows a block rectangle `[min_x, min_z, max_x, max_z]` outward to whole chunks.
+pub fn snap_rect_to_chunks([x0, z0, x1, z1]: [i32; 4]) -> Result<XZBBox, String> {
+    if x1 < x0 || z1 < z0 {
+        return Err(format!("the block rectangle {x0},{z0},{x1},{z1} is empty"));
+    }
+    check_projected_edges([x0 as f64, x1 as f64, z0 as f64, z1 as f64])?;
+    let floor = |v: i32| v.div_euclid(CHUNK_BLOCKS) * CHUNK_BLOCKS;
+    // Past the last block, rounded up to the next chunk edge.
+    let end = |v: i32| (v + CHUNK_BLOCKS).div_euclid(CHUNK_BLOCKS) * CHUNK_BLOCKS;
+    let (min_x, min_z) = (floor(x0), floor(z0));
+    let (max_x_excl, max_z_excl) = (end(x1), end(z1));
+    check_projected_edges([
+        min_x as f64,
+        max_x_excl as f64,
+        min_z as f64,
+        max_z_excl as f64,
+    ])?;
+    XZBBox::rect_from_min_max(min_x, min_z, max_x_excl - 1, max_z_excl - 1)
+}
+
 /// The lat/lon bbox covering a block rectangle, outer edges included.
-pub fn llbbox_for_rect(proj: &WebMercatorProjection, xzbbox: &XZBBox) -> Result<LLBBox, String> {
-    LLBBox::new(
-        proj.lat_for_z(xzbbox.max_z() as f64 + 1.0),
-        proj.lon_for_x(xzbbox.min_x() as f64),
-        proj.lat_for_z(xzbbox.min_z() as f64),
-        proj.lon_for_x(xzbbox.max_x() as f64 + 1.0),
-    )
+pub fn llbbox_for_rect(proj: &WorldProjection, xzbbox: &XZBBox) -> Result<LLBBox, String> {
+    match proj {
+        WorldProjection::WebMercator(p) => LLBBox::new(
+            p.lat_for_z(xzbbox.max_z() as f64 + 1.0),
+            p.lon_for_x(xzbbox.min_x() as f64),
+            p.lat_for_z(xzbbox.min_z() as f64),
+            p.lon_for_x(xzbbox.max_x() as f64 + 1.0),
+        ),
+        WorldProjection::Mcdk(_) => enclosing_llbbox(
+            proj,
+            (xzbbox.min_x() as f64, xzbbox.min_z() as f64),
+            (xzbbox.max_x() as f64 + 1.0, xzbbox.max_z() as f64 + 1.0),
+            OUTLINE_MARGIN_DEG,
+        ),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn wm(lat: f64, lon: f64, scale: f64) -> WorldProjection {
+        WorldProjection::WebMercator(WebMercatorProjection::new(lat, lon, scale))
+    }
+
+    fn mcdk(scale: f64) -> WorldProjection {
+        WorldProjection::Mcdk(McdkProjection::new(scale))
+    }
+
     #[test]
     fn test_projection_kind_display() {
         assert_eq!(ProjectionKind::WebMercator.to_string(), "web_mercator");
+        assert_eq!(ProjectionKind::Mcdk.to_string(), "mcdk");
         assert_eq!(ProjectionKind::Local.to_string(), "local");
     }
 
@@ -254,7 +428,11 @@ mod tests {
 
     #[test]
     fn test_projection_kind_roundtrip() {
-        for kind in [ProjectionKind::WebMercator, ProjectionKind::Local] {
+        for kind in [
+            ProjectionKind::WebMercator,
+            ProjectionKind::Mcdk,
+            ProjectionKind::Local,
+        ] {
             let s = kind.to_string();
             let parsed: ProjectionKind = s.parse().unwrap();
             assert_eq!(parsed, kind);
@@ -263,7 +441,7 @@ mod tests {
 
     #[test]
     fn snapped_rect_sits_on_chunk_edges_and_covers_the_request() {
-        let proj = WebMercatorProjection::new(48.1372, 11.5755, 1.0);
+        let proj = wm(48.1372, 11.5755, 1.0);
         let req = LLBBox::new(48.130, 11.560, 48.145, 11.590).unwrap();
         let (rect, eff) = snap_bbox_to_chunks(&proj, &req).unwrap();
         assert_eq!(rect.min_x().rem_euclid(16), 0);
@@ -280,7 +458,7 @@ mod tests {
 
     #[test]
     fn effective_bbox_reprojects_to_the_same_rect() {
-        let proj = WebMercatorProjection::new(-33.8688, 151.2093, 0.7);
+        let proj = wm(-33.8688, 151.2093, 0.7);
         let req = LLBBox::new(-33.880, 151.190, -33.850, 151.230).unwrap();
         let (rect, eff) = snap_bbox_to_chunks(&proj, &req).unwrap();
         let spec = ProjectionSpec {
@@ -288,6 +466,7 @@ mod tests {
             origin: Some((-33.8688, 151.2093)),
             scale: 0.7,
             clip_pad: 0,
+            rect: None,
         };
         let (_, again) = spec.transformer(&eff).unwrap();
         assert_eq!(
@@ -299,7 +478,7 @@ mod tests {
 
     #[test]
     fn adjacent_requests_tile_without_gap_or_overlap() {
-        let proj = WebMercatorProjection::new(52.52, 13.405, 1.0);
+        let proj = wm(52.52, 13.405, 1.0);
         let west = LLBBox::new(52.510, 13.390, 52.530, 13.405).unwrap();
         let (rw, effw) = snap_bbox_to_chunks(&proj, &west).unwrap();
         let east = LLBBox::new(52.510, effw.max().lng(), 52.530, 13.420).unwrap();
@@ -310,7 +489,7 @@ mod tests {
 
     #[test]
     fn a_degenerate_request_still_gets_one_chunk() {
-        let proj = WebMercatorProjection::new(10.0, 10.0, 1.0);
+        let proj = wm(10.0, 10.0, 1.0);
         let req = LLBBox::new(10.0, 10.0, 10.000001, 10.000001).unwrap();
         let (rect, _) = snap_bbox_to_chunks(&proj, &req).unwrap();
         assert_eq!(rect.max_x() - rect.min_x() + 1, 16);
@@ -320,13 +499,13 @@ mod tests {
     #[test]
     fn snapped_areas_stay_inside_the_world_border() {
         // At scale 4 the border is about 67 degrees east of the origin.
-        let proj = WebMercatorProjection::new(0.0, 0.0, 4.0);
+        let proj = wm(0.0, 0.0, 4.0);
         let request = |east: f64| {
             LLBBox::new(
                 0.0,
-                proj.lon_for_x(east - 100.0),
+                proj.inverse(east - 100.0, 0.0).1,
                 0.001,
-                proj.lon_for_x(east),
+                proj.inverse(east, 0.0).1,
             )
             .unwrap()
         };
@@ -336,6 +515,91 @@ mod tests {
         assert_eq!(rect.max_x() + 1, WORLD_BORDER_BLOCKS as i32);
         let err = snap_bbox_to_chunks(&proj, &request(WORLD_BORDER_BLOCKS + 5.0)).unwrap_err();
         assert!(err.contains("world border"), "{err}");
+    }
+
+    #[test]
+    fn an_mcdk_area_covers_the_request_and_its_bbox_covers_the_area() {
+        let proj = mcdk(1.0);
+        // Slagelse town; UTM is turned about 1.9 degrees against the meridians here.
+        let req = LLBBox::new(55.38167, 11.30991, 55.43070, 11.41153).unwrap();
+        let (rect, eff) = snap_bbox_to_chunks(&proj, &req).unwrap();
+        assert_eq!(rect.min_x().rem_euclid(16), 0);
+        assert_eq!((rect.max_z() + 1).rem_euclid(16), 0);
+        for (lat, lon) in [
+            (req.min().lat(), req.min().lng()),
+            (req.min().lat(), req.max().lng()),
+            (req.max().lat(), req.min().lng()),
+            (req.max().lat(), req.max().lng()),
+        ] {
+            let (x, z) = proj.forward(lat, lon);
+            assert!(x >= rect.min_x() as f64 && x <= rect.max_x() as f64 + 1.0);
+            assert!(z >= rect.min_z() as f64 && z <= rect.max_z() as f64 + 1.0);
+        }
+        for (x, z) in [
+            (rect.min_x(), rect.min_z()),
+            (rect.max_x() + 1, rect.min_z()),
+            (rect.min_x(), rect.max_z() + 1),
+            (rect.max_x() + 1, rect.max_z() + 1),
+        ] {
+            let (lat, lon) = proj.inverse(x as f64, z as f64);
+            assert!(lat >= eff.min().lat() && lat <= eff.max().lat());
+            assert!(lon >= eff.min().lng() && lon <= eff.max().lng());
+        }
+        // The town sits where minecraftdanmark.dk has it.
+        assert!(rect.min_x() <= 49051 && rect.max_x() >= 49051);
+        assert!(rect.min_z() <= 57773 && rect.max_z() >= 57773);
+    }
+
+    #[test]
+    fn a_block_rect_is_kept_exactly_in_mcdk() {
+        let rect = snap_rect_to_chunks([48128, 56832, 49151, 57855]).unwrap();
+        assert_eq!(
+            (rect.min_x(), rect.min_z(), rect.max_x(), rect.max_z()),
+            (48128, 56832, 49151, 57855)
+        );
+        let grown = snap_rect_to_chunks([-5, 17, 0, 31]).unwrap();
+        assert_eq!(
+            (grown.min_x(), grown.min_z(), grown.max_x(), grown.max_z()),
+            (-16, 16, 15, 31)
+        );
+        assert!(snap_rect_to_chunks([10, 0, 9, 0]).is_err());
+
+        let spec = ProjectionSpec {
+            kind: ProjectionKind::Mcdk,
+            origin: None,
+            scale: 1.0,
+            clip_pad: 0,
+            rect: Some([48128, 56832, 49151, 57855]),
+        };
+        let eff = llbbox_for_rect(&mcdk(1.0), &rect).unwrap();
+        let (t, again) = spec.transformer(&eff).unwrap();
+        assert_eq!(
+            (again.min_x(), again.min_z(), again.max_x(), again.max_z()),
+            (48128, 56832, 49151, 57855)
+        );
+        let p = t.transform_point(
+            crate::coordinate_system::geographic::LLPoint::new(55.4036, 11.354).unwrap(),
+        );
+        assert_eq!((p.x, p.z), (49051, 57773));
+    }
+
+    #[test]
+    fn neighbouring_mcdk_rects_share_their_edge() {
+        let proj = mcdk(1.0);
+        let west = XZBBox::rect_from_min_max(0, 0, 1023, 1023).unwrap();
+        let east = XZBBox::rect_from_min_max(1024, 0, 2047, 1023).unwrap();
+        let (bw, be) = (
+            llbbox_for_rect(&proj, &west).unwrap(),
+            llbbox_for_rect(&proj, &east).unwrap(),
+        );
+        // In UTM the boxes overlap a little; the shared block edge lies in both.
+        for z in [0.0, 512.0, 1024.0] {
+            let (lat, lon) = proj.inverse(1024.0, z);
+            for b in [&bw, &be] {
+                assert!(lon >= b.min().lng() && lon <= b.max().lng());
+                assert!(lat >= b.min().lat() && lat <= b.max().lat());
+            }
+        }
     }
 
     #[test]
@@ -356,6 +620,7 @@ mod tests {
             origin: Some((0.0, 0.0)),
             scale: 1.0,
             clip_pad: 64,
+            rect: None,
         };
         let rect = XZBBox::rect_from_min_max(-160, 0, 159, 319).unwrap();
         let clip = spec.clip_bbox(&rect);

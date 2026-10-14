@@ -1,6 +1,124 @@
 //! In-place row resampling and cropping for the ground grids.
 
+use crate::coordinate_system::geographic::LLBBox;
 use crate::projection::web_mercator::{mercator_lat_deg, mercator_y_m};
+use rayon::prelude::*;
+
+/// Output cells between the points where `BlockSampler` runs the inverse
+/// projection. Over 16 blocks UTM bends by far less than a millimetre.
+const LATTICE: usize = 16;
+
+/// Where each cell of a block-aligned grid reads a grid that was fetched at
+/// equal lat/lon steps, for a frame whose block lines are not parallels and
+/// meridians (UTM). Positions are fractional source columns and rows.
+pub struct BlockSampler {
+    pub out_w: usize,
+    pub out_h: usize,
+    lattice_w: usize,
+    cols: Vec<f64>,
+    rows: Vec<f64>,
+}
+
+impl BlockSampler {
+    /// `geo(i, j)` is the latitude and longitude of output cell `(i, j)`. The
+    /// source grid has `src_w` x `src_h` samples spanning `src_bbox` edge to edge.
+    pub fn new(
+        (out_w, out_h): (usize, usize),
+        (src_w, src_h): (usize, usize),
+        src_bbox: &LLBBox,
+        geo: impl Fn(f64, f64) -> (f64, f64) + Sync,
+    ) -> Self {
+        let (out_w, out_h) = (out_w.max(1), out_h.max(1));
+        // One node past the last cell, so every cell lies between two nodes.
+        let lattice_w = (out_w - 1) / LATTICE + 2;
+        let lattice_h = (out_h - 1) / LATTICE + 2;
+        let (north, west) = (src_bbox.max().lat(), src_bbox.min().lng());
+        let lat_span = north - src_bbox.min().lat();
+        let lon_span = src_bbox.max().lng() - west;
+        let col_per_deg = (src_w.max(2) - 1) as f64 / lon_span;
+        let row_per_deg = (src_h.max(2) - 1) as f64 / lat_span;
+        let nodes: Vec<(f64, f64)> = (0..lattice_w * lattice_h)
+            .into_par_iter()
+            .map(|n| {
+                let (a, b) = (n % lattice_w, n / lattice_w);
+                let (lat, lon) = geo((a * LATTICE) as f64, (b * LATTICE) as f64);
+                ((lon - west) * col_per_deg, (north - lat) * row_per_deg)
+            })
+            .collect();
+        Self {
+            out_w,
+            out_h,
+            lattice_w,
+            cols: nodes.iter().map(|n| n.0).collect(),
+            rows: nodes.iter().map(|n| n.1).collect(),
+        }
+    }
+
+    /// Source column and row of output cell `(i, j)`.
+    pub fn at(&self, i: usize, j: usize) -> (f64, f64) {
+        let (a, b) = (i / LATTICE, j / LATTICE);
+        let tx = (i % LATTICE) as f64 / LATTICE as f64;
+        let tz = (j % LATTICE) as f64 / LATTICE as f64;
+        let k = b * self.lattice_w + a;
+        let blend = |v: &[f64]| {
+            let top = v[k] + (v[k + 1] - v[k]) * tx;
+            let k2 = k + self.lattice_w;
+            let bottom = v[k2] + (v[k2 + 1] - v[k2]) * tx;
+            top + (bottom - top) * tz
+        };
+        (blend(&self.cols), blend(&self.rows))
+    }
+
+    /// The output grid in rows, each cell read with `pick(column, row)`.
+    pub fn rows<T: Send>(&self, pick: impl Fn(f64, f64) -> T + Sync) -> Vec<Vec<T>> {
+        (0..self.out_h)
+            .into_par_iter()
+            .map(|j| {
+                (0..self.out_w)
+                    .map(|i| {
+                        let (c, r) = self.at(i, j);
+                        pick(c, r)
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// `rows`, flattened row-major.
+    pub fn flat<T: Send>(&self, pick: impl Fn(f64, f64) -> T + Sync) -> Vec<T> {
+        self.rows(pick).into_iter().flatten().collect()
+    }
+}
+
+/// The nearest cell to a fractional position, clamped to the grid.
+pub fn nearest_index(col: f64, row: f64, width: usize, height: usize) -> (usize, usize) {
+    let clamp = |v: f64, len: usize| (v.round().max(0.0) as usize).min(len.saturating_sub(1));
+    (clamp(col, width), clamp(row, height))
+}
+
+/// Bilinear height at a fractional position; a cell next to a gap takes the
+/// nearest value instead of blending into it.
+pub fn bilinear(grid: &[Vec<f32>], col: f64, row: f64) -> f32 {
+    let height = grid.len();
+    let width = grid.first().map_or(0, Vec::len);
+    if width == 0 {
+        return f32::NAN;
+    }
+    let c = col.clamp(0.0, (width - 1) as f64);
+    let r = row.clamp(0.0, (height - 1) as f64);
+    let (x0, z0) = (c.floor() as usize, r.floor() as usize);
+    let (x1, z1) = ((x0 + 1).min(width - 1), (z0 + 1).min(height - 1));
+    let (tx, tz) = (c - x0 as f64, r - z0 as f64);
+    let corners = [grid[z0][x0], grid[z0][x1], grid[z1][x0], grid[z1][x1]];
+    if corners.iter().any(|v| !v.is_finite()) {
+        let (x, z) = nearest_index(c, r, width, height);
+        return grid[z][x];
+    }
+    let [a, b, d, e] = corners.map(f64::from);
+    let top = a + (b - a) * tx;
+    let bottom = d + (e - d) * tx;
+    (top + (bottom - top) * tz) as f32
+}
 
 /// Fractional source row for output row `gz`, when rows sampled at equal
 /// latitude steps are re-spaced to equal Mercator steps over the same span.
@@ -245,6 +363,39 @@ mod tests {
         let mut g: Vec<u8> = (0..10).map(|i| (i / width) as u8).collect();
         remap_flat_rows_nearest(&mut g, width, |gz| (gz as f64 - 0.6).max(0.0));
         assert_eq!(g, vec![0, 0, 0, 0, 1, 1, 2, 2, 3, 3]);
+    }
+
+    #[test]
+    fn the_sampler_reads_a_turned_grid_where_the_projection_says() {
+        // Source: 101 x 101 samples over one degree, value = column + 1000 * row.
+        let bbox = LLBBox::new(55.0, 11.0, 56.0, 12.0).unwrap();
+        let grid: Vec<Vec<f32>> = (0..101)
+            .map(|r| (0..101).map(|c| (c + 1000 * r) as f32).collect())
+            .collect();
+        // Output cells walk a line turned against the grid.
+        let geo = |i: f64, j: f64| (55.9 - j * 0.01 + i * 0.001, 11.1 + i * 0.01 + j * 0.002);
+        let s = BlockSampler::new((37, 41), (101, 101), &bbox, geo);
+        for (i, j) in [(0, 0), (5, 3), (16, 16), (17, 33), (36, 40)] {
+            let (lat, lon) = geo(i as f64, j as f64);
+            let (c, r) = s.at(i, j);
+            assert!((c - (lon - 11.0) * 100.0).abs() < 1e-6, "{i},{j}: {c}");
+            assert!((r - (56.0 - lat) * 100.0).abs() < 1e-6, "{i},{j}: {r}");
+            let v = bilinear(&grid, c, r);
+            assert!((f64::from(v) - (c + 1000.0 * r)).abs() < 1e-2, "{v}");
+        }
+        let out = s.rows(|c, r| bilinear(&grid, c, r));
+        assert_eq!((out.len(), out[0].len()), (41, 37));
+        assert_eq!(s.flat(|c, _| c).len(), 37 * 41);
+    }
+
+    #[test]
+    fn bilinear_steps_around_gaps_and_clamps_to_the_grid() {
+        let grid = vec![vec![0.0, 10.0], vec![20.0, 30.0]];
+        assert_eq!(bilinear(&grid, 0.5, 0.5), 15.0);
+        assert_eq!(bilinear(&grid, 5.0, -3.0), 10.0);
+        let gap = vec![vec![0.0, 10.0], vec![f32::NAN, 30.0]];
+        assert_eq!(bilinear(&gap, 0.8, 0.4), 10.0);
+        assert_eq!(nearest_index(-0.7, 9.0, 2, 2), (0, 1));
     }
 
     #[test]

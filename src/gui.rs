@@ -1096,6 +1096,7 @@ fn gui_one_world_overlap(
 /// Map overlays plus the frame the teleport menu projects with.
 #[derive(serde::Serialize)]
 struct OneWorldOverlays {
+    frame: crate::one_world::Frame,
     origin_lat: f64,
     origin_lon: f64,
     scale: f64,
@@ -1137,6 +1138,7 @@ fn gui_get_one_world_overlays(world_path: String) -> Result<Option<OneWorldOverl
         });
     }
     Ok(Some(OneWorldOverlays {
+        frame: manifest.frame,
         origin_lat: manifest.origin_lat,
         origin_lon: manifest.origin_lon,
         scale: manifest.scale,
@@ -1748,6 +1750,7 @@ fn gui_start_generation(
                 world_type: crate::args::WorldType::from_str_lossy(&world_type),
                 map_item,
                 one_world_height: crate::args::OneWorldHeight::Earth,
+                block_rect: None,
                 // Frontend refuses previews for rotated worlds, skip the work there.
                 map_preview: world_format != WorldFormat::LuantiWorld
                     && rotation_angle.abs() <= f64::EPSILON,

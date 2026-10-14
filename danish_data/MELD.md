@@ -1,19 +1,23 @@
 # Large-area generation with Meld
 
-This experimental CLI integration uses an external [Meld](https://github.com/Teddy563/meld)
-checkout to divide an area into cells. Arnis-DK generates each cell into the same
-Java world using **One World**, including Danish buildings, address signs and
-optional caves. Cells run sequentially, with multiple generator threads inside
-each cell. Interrupted jobs can be resumed.
+This experimental CLI integration divides an area into cells. Arnis-DK
+generates each cell into the same Java world using **One World**, including
+Danish buildings, address signs and optional caves. Cells run sequentially,
+with multiple generator threads inside each cell. Interrupted jobs can be
+resumed.
 
-The integration uses Meld's grid planner, not its GUI, updater or region-merging
+New jobs place cells on the grid of the classic minecraftdanmark.dk map, so
+every building has the X and Z that `/atp` gives for its address (see
+[coordinates](../README.md#coordinates)). Planning with `--frame meld` instead
+uses the Web Mercator grid of an external [Meld](https://github.com/Teddy563/meld)
+checkout: its grid planner only, not its GUI, updater or region-merging
 workflow. Meld remains a separate dependency; its source is not bundled here.
 
 ## Setup
 
 Follow the [Danish data setup guide](README.md) to build the CLI, activate a
-Python 3.12+ environment and configure a Datafordeler API key. Install Meld
-separately. The compatible grid version used by this integration is:
+Python 3.12+ environment and configure a Datafordeler API key. Only
+`--frame meld` needs Meld, installed separately. The compatible grid version is:
 
 ```sh
 git clone https://github.com/Teddy563/meld.git .local/vendor/meld
@@ -27,14 +31,18 @@ The example uses the Windows executable; on Linux/macOS, replace
 `target/release/arnis.exe` with `target/release/arnis`.
 
 ```sh
-python danish_data/meld_bridge.py plan --meld-source .local/vendor/meld --arnis target/release/arnis.exe --job .local/meld-jobs/example --bbox "55.670,12.560,55.690,12.590" --cell-regions 2 --threads 4 --caves
+python danish_data/meld_bridge.py plan --arnis target/release/arnis.exe --job .local/meld-jobs/example --bbox "55.670,12.560,55.690,12.590" --cell-regions 2 --threads 4 --caves
 ```
 
 Planning writes `plan.json` without downloading building/terrain data or
 generating a world. Bounding boxes are **south, west, north, east** in WGS84.
 
-- `--cell-regions 2` uses cells about 1,024 blocks per side. The supported range
-  is 1–4 regions per side; edge cells may be smaller.
+- `--cell-regions 2` uses cells of 1,024 by 1,024 blocks, aligned to the
+  minecraftdanmark.dk grid so that no two cells share a region file. The
+  supported range is 1–4 regions per side; edge cells may be smaller. Each cell
+  is passed to Arnis as an exact block rectangle with `--block-rect`.
+- `--frame meld --meld-source .local/vendor/meld` plans on Meld's Web Mercator
+  grid instead, as jobs did before.
 - `--scale 1` represents approximately one metre per block. Smaller scales
   cover more geographic area per cell.
 - `--threads` controls Rust worker threads inside each cell.
@@ -78,7 +86,8 @@ with. Keep the world closed in Minecraft and on servers while generating.
 
 ## Files, consistency and recovery
 
-- The plan pins the generator, Meld grid files and optional inputs by SHA-256.
+- The plan pins the generator, the Meld grid files (with `--frame meld`) and
+  optional inputs by SHA-256.
   Changed inputs require the original files or a new job directory.
 - A job lock prevents two bridge processes from writing simultaneously. After
   a hard interruption, check that the recorded process has stopped before
@@ -93,6 +102,8 @@ with. Keep the world closed in Minecraft and on servers while generating.
   including padding. You are responsible for equivalent coverage in the OSM file.
 
 ## Why not replace Meld's executable directly?
+
+This applies to `--frame meld`.
 
 The supported Meld version expects CLI options such as `--master-origin-lat/lng`,
 `--seed` and `--elevation-min/max` that this Arnis version does not provide.

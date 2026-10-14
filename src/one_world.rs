@@ -1,15 +1,19 @@
 //! One World: one persistent Java world that every generation extends.
 //!
-//! The world pins a Web Mercator frame (origin and scale in the manifest next
-//! to `level.dat`). Every requested area is snapped outward to whole chunks in
-//! that frame and written into the existing region files, so areas generated
-//! at different times line up block for block.
+//! The world pins its frame in the manifest next to `level.dat`: Web Mercator
+//! around an origin, or the minecraftdanmark.dk UTM frame. Every requested area
+//! is snapped outward to whole chunks in that frame and written into the
+//! existing region files, so areas generated at different times line up block
+//! for block.
 
 use crate::args::{Args, OneWorldHeight};
 use crate::coordinate_system::cartesian::XZBBox;
 use crate::coordinate_system::geographic::LLBBox;
 use crate::elevation::ElevationAffine;
-use crate::projection::{snap_bbox_to_chunks, WebMercatorProjection};
+use crate::projection::{
+    llbbox_for_rect, snap_bbox_to_chunks, snap_rect_to_chunks, McdkProjection, ProjectionKind,
+    WebMercatorProjection, WorldProjection,
+};
 use crate::world_utils::{world_is_locked, SessionLock};
 use serde::{Deserialize, Serialize};
 use std::io::Read;
@@ -24,6 +28,47 @@ pub const DEFAULT_WORLD_NAME: &str = "Arnis One World";
 /// Earth on the extended build height, or sea level at Y 63 on the normal one),
 /// which older builds would not apply.
 pub const MANIFEST_VERSION: u32 = 3;
+/// 4: the world uses the minecraftdanmark.dk frame, which an older build would
+/// read as Web Mercator. Web Mercator worlds keep writing version 3.
+pub const MCDK_MANIFEST_VERSION: u32 = 4;
+
+/// How a One World maps lat/lon to blocks.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Frame {
+    /// Web Mercator around `origin_lat`/`origin_lon`, as every world before version 4.
+    #[default]
+    WebMercator,
+    /// UTM zone 32N with `X = E - 600000`, `Z = 6200000 - N`: the coordinates of
+    /// the classic minecraftdanmark.dk map. `origin_lat`/`origin_lon` hold its
+    /// (0, 0) near Samsø, which also anchors the climate.
+    Mcdk,
+}
+
+impl Frame {
+    fn is_web_mercator(&self) -> bool {
+        *self == Frame::WebMercator
+    }
+
+    pub fn kind(self) -> ProjectionKind {
+        match self {
+            Frame::WebMercator => ProjectionKind::WebMercator,
+            Frame::Mcdk => ProjectionKind::Mcdk,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Frame::WebMercator => "Web Mercator",
+            Frame::Mcdk => "minecraftdanmark.dk (UTM zone 32)",
+        }
+    }
+}
+
+/// UTM zone 32 stays exact thousands of kilometres from its meridian, but the
+/// frame is meant for Denmark and its neighbours.
+const MCDK_MAX_LON_FROM_9E: f64 = 15.0;
+const MCDK_LATS: std::ops::RangeInclusive<f64> = 45.0..=72.0;
 
 /// Sea level of a One World with the normal build height, as in vanilla.
 pub const VANILLA_SEA_LEVEL_Y: i32 = 63;
@@ -80,6 +125,8 @@ pub struct Manifest {
     pub created_with: String,
     /// Unix seconds.
     pub created_at: u64,
+    #[serde(default, skip_serializing_if = "Frame::is_web_mercator")]
+    pub frame: Frame,
     pub origin_lat: f64,
     pub origin_lon: f64,
     pub scale: f64,
@@ -106,13 +153,17 @@ fn is_real_height(multiplier: &f64) -> bool {
 }
 
 impl Manifest {
-    fn new(args: &Args, origin_lat: f64, origin_lon: f64) -> Self {
+    fn new(args: &Args, frame: Frame, origin_lat: f64, origin_lon: f64) -> Self {
         let scale = stable(args.scale, 9);
         let height_multiplier = stable(args.height_multiplier, 6);
         Self {
-            version: MANIFEST_VERSION,
+            version: match frame {
+                Frame::WebMercator => MANIFEST_VERSION,
+                Frame::Mcdk => MCDK_MANIFEST_VERSION,
+            },
             created_with: format!("arnis {}", env!("CARGO_PKG_VERSION")),
             created_at: unix_now(),
+            frame,
             origin_lat: stable(origin_lat, 7),
             origin_lon: stable(origin_lon, 7),
             scale,
@@ -150,8 +201,15 @@ impl Manifest {
         }
     }
 
-    pub fn projection(&self) -> WebMercatorProjection {
-        WebMercatorProjection::new(self.origin_lat, self.origin_lon, self.scale)
+    pub fn projection(&self) -> WorldProjection {
+        match self.frame {
+            Frame::WebMercator => WorldProjection::WebMercator(WebMercatorProjection::new(
+                self.origin_lat,
+                self.origin_lon,
+                self.scale,
+            )),
+            Frame::Mcdk => WorldProjection::Mcdk(McdkProjection::new(self.scale)),
+        }
     }
 
     pub fn path_in(world_dir: &Path) -> PathBuf {
@@ -167,7 +225,7 @@ impl Manifest {
             .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
         let manifest: Manifest = serde_json::from_str(&text)
             .map_err(|e| format!("{} is not a valid One World manifest: {e}", path.display()))?;
-        if manifest.version > MANIFEST_VERSION {
+        if manifest.version > MCDK_MANIFEST_VERSION {
             return Err(format!(
                 "{} was written by a newer Arnis (manifest version {}); update Arnis to extend this world.",
                 path.display(),
@@ -186,6 +244,11 @@ impl Manifest {
         }
         if !(self.origin_lon.is_finite() && self.origin_lon.abs() <= 180.0) {
             return Err(format!("origin longitude {}", self.origin_lon));
+        }
+        if self.frame == Frame::Mcdk && self.version < MCDK_MANIFEST_VERSION {
+            return Err(format!(
+                "the minecraftdanmark.dk frame needs manifest version {MCDK_MANIFEST_VERSION}"
+            ));
         }
         crate::args::validate_scale(self.scale)?;
         crate::args::validate_height_multiplier(self.height_multiplier)?;
@@ -273,6 +336,10 @@ pub fn existing_chunks(world_dir: &Path, rect: &XZBBox) -> u64 {
 #[derive(Clone, Debug)]
 pub struct RunContext {
     pub world_dir: PathBuf,
+    /// The world's frame, as a projection kind.
+    pub projection: ProjectionKind,
+    /// This area's block rectangle `[min_x, min_z, max_x, max_z]`.
+    pub rect: [i32; 4],
     pub origin_lat: f64,
     pub origin_lon: f64,
     pub extending: bool,
@@ -299,6 +366,12 @@ pub struct Session {
 
 fn compatibility_errors(manifest: &Manifest, args: &Args) -> Vec<String> {
     let mut errors = Vec::new();
+    if args.projection == ProjectionKind::Mcdk && manifest.frame != Frame::Mcdk {
+        errors.push(format!(
+            "the world uses {} coordinates, and a world cannot change its frame",
+            manifest.frame.name()
+        ));
+    }
     if (manifest.scale - args.scale).abs() > 1e-9 {
         errors.push(format!(
             "world scale {:.2} does not match the world's {:.2}",
@@ -457,14 +530,52 @@ fn resolve(
                     args.disable_height_limit = false;
                 }
             }
-            let origin_lat = (requested.min().lat() + requested.max().lat()) / 2.0;
-            let origin_lon = (requested.min().lng() + requested.max().lng()) / 2.0;
-            (Manifest::new(args, origin_lat, origin_lon), true)
+            let frame = if args.projection == ProjectionKind::Mcdk {
+                println!(
+                    "One World: minecraftdanmark.dk coordinates (UTM zone 32, X = E - 600000, Z = 6200000 - N)."
+                );
+                Frame::Mcdk
+            } else {
+                Frame::WebMercator
+            };
+            let (origin_lat, origin_lon) = match frame {
+                Frame::WebMercator => (
+                    (requested.min().lat() + requested.max().lat()) / 2.0,
+                    (requested.min().lng() + requested.max().lng()) / 2.0,
+                ),
+                Frame::Mcdk => McdkProjection::new(1.0).inverse(0.0, 0.0),
+            };
+            (Manifest::new(args, frame, origin_lat, origin_lon), true)
         }
     };
 
+    if manifest.frame == Frame::Mcdk && args.projection != ProjectionKind::Mcdk {
+        println!("Note: this One World uses minecraftdanmark.dk coordinates.");
+    }
     args.scale = manifest.scale;
-    let (xzbbox, llbbox) = snap_bbox_to_chunks(&manifest.projection(), requested)?;
+    let projection = manifest.projection();
+    let (xzbbox, llbbox) = match args.block_rect {
+        Some(rect) => {
+            let xzbbox = snap_rect_to_chunks(rect)?;
+            let llbbox = llbbox_for_rect(&projection, &xzbbox)?;
+            (xzbbox, llbbox)
+        }
+        None => snap_bbox_to_chunks(&projection, requested)?,
+    };
+    if manifest.frame == Frame::Mcdk {
+        let corners = [
+            (llbbox.min().lat(), llbbox.min().lng()),
+            (llbbox.max().lat(), llbbox.max().lng()),
+        ];
+        if corners.iter().any(|&(lat, lon)| {
+            !MCDK_LATS.contains(&lat) || (lon - 9.0).abs() > MCDK_MAX_LON_FROM_9E
+        }) {
+            return Err(
+                "This area is too far from Denmark for the minecraftdanmark.dk frame (UTM zone 32)."
+                    .to_string(),
+            );
+        }
+    }
 
     if created {
         let name = world_dir
@@ -513,6 +624,13 @@ fn resolve(
 
     args.one_world_run = Some(RunContext {
         world_dir: world_dir.to_path_buf(),
+        projection: manifest.frame.kind(),
+        rect: [
+            xzbbox.min_x(),
+            xzbbox.min_z(),
+            xzbbox.max_x(),
+            xzbbox.max_z(),
+        ],
         origin_lat: manifest.origin_lat,
         origin_lon: manifest.origin_lon,
         extending,
@@ -520,7 +638,7 @@ fn resolve(
         replaced_chunks: replaced,
         area_id,
     });
-    args.projection = crate::projection::ProjectionKind::WebMercator;
+    args.projection = manifest.frame.kind();
     args.bbox = Some(llbbox);
     // Voxy rebuilds the LOD database from the regions of one run, and both
     // facade sources replace the world's resource pack on every run.
@@ -567,11 +685,12 @@ fn resolve(
             String::new()
         }
     );
-    // Ground scale changes with latitude; far from the origin a request
-    // becomes a much larger world than its size on the map suggests.
+    // In Web Mercator the ground scale changes with latitude; far from the
+    // origin a request becomes a much larger world than its size on the map
+    // suggests. UTM keeps a metre within 0.1 % of a block across Denmark.
     let centre_lat = (llbbox.min().lat() + llbbox.max().lat()) / 2.0;
     let density = manifest.origin_lat.to_radians().cos() / centre_lat.to_radians().cos();
-    if !(0.8..=1.25).contains(&density) {
+    if manifest.frame == Frame::WebMercator && !(0.8..=1.25).contains(&density) {
         println!(
             "Note: this far from the world's origin one metre is {:.2} blocks instead of {:.2}.",
             args.scale * density,
@@ -769,6 +888,137 @@ mod tests {
             .err()
             .unwrap();
         assert!(err.contains("with terrain"), "{err}");
+    }
+
+    const SLAGELSE: &str = "55.395,11.340,55.410,11.365";
+
+    #[test]
+    fn an_mcdk_world_uses_the_minecraftdanmark_coordinates() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = dir.path().join("w");
+        let req = LLBBox::from_str(SLAGELSE).unwrap();
+        let mut args = args_for(SLAGELSE, &["--one-world", "--projection", "mcdk"]);
+        let session = prepare(&world, &req, &mut args).unwrap();
+        let manifest = Manifest::load(&world).unwrap().unwrap();
+        assert_eq!(manifest.frame, Frame::Mcdk);
+        assert_eq!(manifest.version, MCDK_MANIFEST_VERSION);
+        // (0, 0) near Samsø, as on minecraftdanmark.dk.
+        assert_eq!(
+            (manifest.origin_lat, manifest.origin_lon),
+            (55.9349761, 10.6007821)
+        );
+        let text = std::fs::read_to_string(Manifest::path_in(&world)).unwrap();
+        assert!(text.contains("\"frame\": \"mcdk\""), "{text}");
+
+        let run = args.one_world_run.as_ref().unwrap();
+        assert_eq!(run.projection, ProjectionKind::Mcdk);
+        assert_eq!(args.projection, ProjectionKind::Mcdk);
+        let area = rect(&args, &session);
+        assert_eq!(
+            [area.min_x(), area.min_z(), area.max_x(), area.max_z()],
+            run.rect
+        );
+        // Slagelse centre lies inside, at its /atp coordinates.
+        let (t, _) = crate::projection::ProjectionSpec::from_args(&args)
+            .transformer(&session.llbbox)
+            .unwrap();
+        let p = t.transform_point(
+            crate::coordinate_system::geographic::LLPoint::new(55.4036, 11.354).unwrap(),
+        );
+        assert_eq!((p.x, p.z), (49051, 57773));
+        assert!(area.contains(&p));
+    }
+
+    #[test]
+    fn a_block_rect_becomes_the_area_exactly() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = dir.path().join("w");
+        let req = LLBBox::from_str(SLAGELSE).unwrap();
+        let cell = "48128,56832,49151,57855";
+        let flags = ["--one-world", "--projection", "mcdk", "--block-rect", cell];
+        let mut args = args_for(SLAGELSE, &flags);
+        let session = prepare(&world, &req, &mut args).unwrap();
+        assert_eq!(
+            args.one_world_run.as_ref().unwrap().rect,
+            [48128, 56832, 49151, 57855]
+        );
+        let area = rect(&args, &session);
+        assert_eq!(
+            (area.min_x(), area.min_z(), area.max_x(), area.max_z()),
+            (48128, 56832, 49151, 57855)
+        );
+        // The bbox covers the whole rectangle, corners included.
+        let proj = McdkProjection::new(1.0);
+        for (x, z) in [(48128.0, 56832.0), (49152.0, 57856.0), (48128.0, 57856.0)] {
+            let (lat, lon) = proj.inverse(x, z);
+            assert!(lat >= session.llbbox.min().lat() && lat <= session.llbbox.max().lat());
+            assert!(lon >= session.llbbox.min().lng() && lon <= session.llbbox.max().lng());
+        }
+        record(&args, &session, None);
+        drop(session);
+
+        // The next cell east, without naming the frame again.
+        let mut args2 = args_for(
+            SLAGELSE,
+            &["--one-world", "--block-rect", "49152,56832,50175,57855"],
+        );
+        let session2 = prepare(&world, &req, &mut args2).unwrap();
+        assert_eq!(args2.projection, ProjectionKind::Mcdk);
+        assert_eq!(rect(&args2, &session2).min_x(), 49152);
+        assert!(args2.one_world_run.as_ref().unwrap().extending);
+    }
+
+    #[test]
+    fn a_world_keeps_its_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = dir.path().join("w");
+        let req = LLBBox::from_str(SLAGELSE).unwrap();
+        drop(prepare(&world, &req, &mut args_for(SLAGELSE, &["--one-world"])).unwrap());
+        let err = prepare(
+            &world,
+            &req,
+            &mut args_for(SLAGELSE, &["--one-world", "--projection", "mcdk"]),
+        )
+        .err()
+        .unwrap();
+        assert!(err.contains("cannot change its frame"), "{err}");
+        // Web Mercator worlds keep writing a manifest older builds read.
+        let manifest = Manifest::load(&world).unwrap().unwrap();
+        assert_eq!(manifest.frame, Frame::WebMercator);
+        assert_eq!(manifest.version, MANIFEST_VERSION);
+        let text = std::fs::read_to_string(Manifest::path_in(&world)).unwrap();
+        assert!(!text.contains("frame"), "{text}");
+    }
+
+    #[test]
+    fn the_mcdk_frame_stays_near_denmark() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = dir.path().join("w");
+        let tokyo = "35.68,139.75,35.69,139.76";
+        let err = prepare(
+            &world,
+            &LLBBox::from_str(tokyo).unwrap(),
+            &mut args_for(tokyo, &["--one-world", "--projection", "mcdk"]),
+        )
+        .err()
+        .unwrap();
+        assert!(err.contains("too far from Denmark"), "{err}");
+        assert!(!world.exists());
+    }
+
+    #[test]
+    fn a_manifest_claiming_mcdk_below_version_4_is_damaged() {
+        let dir = tempfile::tempdir().unwrap();
+        let world = dir.path().join("w");
+        let req = LLBBox::from_str(SLAGELSE).unwrap();
+        drop(prepare(&world, &req, &mut args_for(SLAGELSE, &["--one-world"])).unwrap());
+        let path = Manifest::path_in(&world);
+        let mut value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        value["frame"] = "mcdk".into();
+        std::fs::write(&path, value.to_string()).unwrap();
+        let err = Manifest::load(&world).unwrap_err();
+        assert!(err.contains("damaged"), "{err}");
     }
 
     #[test]

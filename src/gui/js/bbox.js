@@ -1244,22 +1244,62 @@ $(document).ready(function () {
         }
     }
 
+    // UTM zone 32N on GRS80 (EPSG:25832): the Kruger series of
+    // src/projection/utm.rs. Returns easting and northing in metres.
+    var utm32 = (function () {
+        var f = 1 / 298.257222101;
+        var n = f / (2 - f);
+        var p = [n, n * n, n * n * n, Math.pow(n, 4), Math.pow(n, 5), Math.pow(n, 6)];
+        var k0A = 0.9996 * 6378137 / (1 + n) * (1 + p[1] / 4 + p[3] / 64 + p[5] / 256);
+        var alpha = [
+            p[0] / 2 - 2 * p[1] / 3 + 5 * p[2] / 16 + 41 * p[3] / 180 - 127 * p[4] / 288 + 7891 * p[5] / 37800,
+            13 * p[1] / 48 - 3 * p[2] / 5 + 557 * p[3] / 1440 + 281 * p[4] / 630 - 1983433 * p[5] / 1935360,
+            61 * p[2] / 240 - 103 * p[3] / 140 + 15061 * p[4] / 26880 + 167603 * p[5] / 181440,
+            49561 * p[3] / 161280 - 179 * p[4] / 168 + 6601661 * p[5] / 7257600,
+            34729 * p[4] / 80640 - 3418889 * p[5] / 1995840,
+            212378941 * p[5] / 319334400
+        ];
+        var e = Math.sqrt(f * (2 - f));
+        return function (lat, lng) {
+            var rad = Math.PI / 180;
+            var lambda = (lng - 9) * rad;
+            var tau = Math.tan(lat * rad);
+            var sigma = Math.sinh(e * Math.atanh(e * tau / Math.hypot(tau, 1)));
+            var tauP = tau * Math.hypot(sigma, 1) - sigma * Math.hypot(tau, 1);
+            var xiP = Math.atan2(tauP, Math.cos(lambda));
+            var etaP = Math.asinh(Math.sin(lambda) / Math.hypot(tauP, Math.cos(lambda)));
+            var xi = xiP, eta = etaP;
+            for (var j = 1; j <= 6; j++) {
+                xi += alpha[j - 1] * Math.sin(2 * j * xiP) * Math.cosh(2 * j * etaP);
+                eta += alpha[j - 1] * Math.cos(2 * j * xiP) * Math.sinh(2 * j * etaP);
+            }
+            return { e: 500000 + k0A * eta, n: k0A * xi };
+        };
+    })();
+
     // Calculate Minecraft coordinates from lat/lng
     function calculateMinecraftCoords(lat, lng) {
         if (!worldOverlayData) return null;
 
         var data = worldOverlayData;
 
-        // One World: same projection as src/projection/web_mercator.rs.
+        // One World: the frame of src/projection, Web Mercator or minecraftdanmark.dk.
         if (data.areas) {
-            var R = 6371000.0;
-            var rad = Math.PI / 180;
-            var k = data.scale * Math.cos(data.origin_lat * rad);
-            var mercY = function (latDeg) {
-                return R * Math.log(Math.tan(Math.PI / 4 + latDeg * rad / 2));
-            };
-            var x = Math.floor(R * (lng - data.origin_lon) * rad * k);
-            var z = Math.floor(-(mercY(lat) - mercY(data.origin_lat)) * k);
+            var x, z;
+            if (data.frame === 'mcdk') {
+                var utm = utm32(lat, lng);
+                x = Math.floor((utm.e - 600000) * data.scale);
+                z = Math.floor((6200000 - utm.n) * data.scale);
+            } else {
+                var R = 6371000.0;
+                var rad = Math.PI / 180;
+                var k = data.scale * Math.cos(data.origin_lat * rad);
+                var mercY = function (latDeg) {
+                    return R * Math.log(Math.tan(Math.PI / 4 + latDeg * rad / 2));
+                };
+                x = Math.floor(R * (lng - data.origin_lon) * rad * k);
+                z = Math.floor(-(mercY(lat) - mercY(data.origin_lat)) * k);
+            }
             // Terrain can be anywhere from Y -2014 to 2016, so land on the top block.
             return { x: x, y: 100, z: z, command: '/spreadplayers ' + x + ' ' + z + ' 0 1 false @s' };
         }
@@ -1467,6 +1507,7 @@ $(document).ready(function () {
             if (areas.length > 0) {
                 enableWorldPreview({
                     areas: areas,
+                    frame: event.data.frame,
                     origin_lat: event.data.origin_lat,
                     origin_lon: event.data.origin_lon,
                     scale: event.data.scale

@@ -1,6 +1,6 @@
 use super::cartesian::{XZBBox, XZPoint};
 use super::geographic::{LLBBox, LLPoint};
-use crate::projection::WebMercatorProjection;
+use crate::projection::{McdkProjection, WebMercatorProjection, WorldProjection};
 
 /// Internal mode discriminator so `transform_point` can dispatch between the
 /// legacy linear interpolation and Web Mercator projection.
@@ -8,6 +8,7 @@ enum ProjectionMode {
     /// Existing linear-interpolation mode (no geographic projection).
     Local,
     WebMercator(WebMercatorProjection),
+    Mcdk(McdkProjection),
 }
 
 /// Transform geographic space (within llbbox) to a local tangential cartesian space (within xzbbox)
@@ -102,6 +103,36 @@ impl CoordTransformer {
         ))
     }
 
+    /// A transformer for a block rectangle fixed in advance. In UTM the
+    /// rectangle is not derived from the bbox, which only has to cover it.
+    pub fn with_frame(
+        llbbox: &LLBBox,
+        projection: WorldProjection,
+        xzbbox: XZBBox,
+    ) -> Result<(CoordTransformer, XZBBox), String> {
+        crate::projection::check_projected_edges([
+            xzbbox.min_x() as f64,
+            xzbbox.max_x() as f64 + 1.0,
+            xzbbox.min_z() as f64,
+            xzbbox.max_z() as f64 + 1.0,
+        ])?;
+        Ok((
+            CoordTransformer {
+                len_lat: llbbox.max().lat() - llbbox.min().lat(),
+                len_lng: llbbox.max().lng() - llbbox.min().lng(),
+                scale_factor_x: (xzbbox.max_x() - xzbbox.min_x() + 1) as f64,
+                scale_factor_z: (xzbbox.max_z() - xzbbox.min_z() + 1) as f64,
+                min_lat: llbbox.min().lat(),
+                min_lng: llbbox.min().lng(),
+                mode: match projection {
+                    WorldProjection::WebMercator(p) => ProjectionMode::WebMercator(p),
+                    WorldProjection::Mcdk(p) => ProjectionMode::Mcdk(p),
+                },
+            },
+            xzbbox,
+        ))
+    }
+
     pub fn transform_point(&self, llpoint: LLPoint) -> XZPoint {
         match &self.mode {
             ProjectionMode::Local => {
@@ -119,6 +150,10 @@ impl CoordTransformer {
                 let x = proj.x_for_lon(llpoint.lng()).floor();
                 let z = proj.z_for_lat(llpoint.lat()).floor();
                 XZPoint::new(x as i32, z as i32)
+            }
+            ProjectionMode::Mcdk(proj) => {
+                let (x, z) = proj.forward(llpoint.lat(), llpoint.lng());
+                XZPoint::new(x.floor() as i32, z.floor() as i32)
             }
         }
     }

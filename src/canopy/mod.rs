@@ -74,6 +74,18 @@ impl CanopyData {
         });
     }
 
+    /// Re-lays the grid on blocks through `sampler`.
+    pub fn resample(&mut self, sampler: &crate::grid_ops::BlockSampler) {
+        let (w, h, grid) = (self.width, self.height, &self.grid);
+        let fresh = sampler.flat(|c, r| {
+            let (x, z) = crate::grid_ops::nearest_index(c, r, w, h);
+            grid[z * w + x]
+        });
+        self.grid = fresh;
+        self.width = sampler.out_w;
+        self.height = sampler.out_h;
+    }
+
     pub fn crop(&mut self, x0: usize, z0: usize, width: usize, height: usize) {
         crate::grid_ops::crop_flat(&mut self.grid, self.width, x0, z0, width, height);
         self.width = width;

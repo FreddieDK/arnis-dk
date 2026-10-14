@@ -3096,6 +3096,7 @@ async function refreshOneWorldState() {
       type: 'oneWorldOverlays',
       world_path: info.world_path,
       areas: (overlays && overlays.areas) || [],
+      frame: overlays ? overlays.frame : 'web_mercator',
       origin_lat: overlays ? overlays.origin_lat : 0,
       origin_lon: overlays ? overlays.origin_lon : 0,
       scale: overlays ? overlays.scale : 1

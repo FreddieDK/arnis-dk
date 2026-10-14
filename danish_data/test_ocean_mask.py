@@ -90,7 +90,7 @@ class OceanTests(unittest.TestCase):
             cells = [{'cell_key': str(i), 'bbox': {'south': 55, 'west': 11+i*.01,
                       'north': 55.005, 'east': 11+(i+1)*.01}} for i in range(3)]
             grid = argparse.Namespace(cells_for_bbox=lambda *a, **kw: cells)
-            args = argparse.Namespace(scale=1, cell_regions=2, max_cells=1, threads=1,
+            args = argparse.Namespace(scale=1, cell_regions=2, frame='meld', max_cells=1, threads=1,
                 job=root/'job', bbox='55,11,55.005,11.03', meld_source=root,
                 arnis=binary, danish_buildings=None, osm_file=None, caves=False,
                 signage='full', land_mask=mask, coast_buffer_m=1000,
@@ -124,7 +124,7 @@ class OceanTests(unittest.TestCase):
             bridge.atomic_json(snapshot, {'arnis_dk_bridge_coverage': [54,10,57,16],
                 'elements': [{'id':1,'type':'way','tags':{'bridge':'yes','highway':'primary'},
                 'geometry':[{'lat':55.002,'lon':11.1},{'lat':55.002,'lon':11.2}]}]})
-            args = argparse.Namespace(scale=1,cell_regions=2,max_cells=1,threads=1,
+            args = argparse.Namespace(scale=1,cell_regions=2,frame='meld',max_cells=1,threads=1,
                 job=root/'job',bbox='55,11,55.005,11.3',meld_source=root,
                 arnis=binary,danish_buildings=None,osm_file=None,caves=True,
                 signage='full',land_mask=mask,coast_buffer_m=2000,keep_bbox=[],bridge_mask=snapshot)

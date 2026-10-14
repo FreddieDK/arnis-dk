@@ -10,9 +10,10 @@ use crate::elevation::{
     compute_grid_dims, compute_grid_dims_for_world, AffinePolicy, ElevationAffine,
 };
 use crate::elevation_data::{fetch_elevation_data, ElevationData};
+use crate::grid_ops::BlockSampler;
 use crate::land_cover::{self, LandCoverData};
 use crate::osm_parser::ProcessedElement;
-use crate::projection::WebMercatorProjection;
+use crate::projection::WorldProjection;
 #[cfg(feature = "gui")]
 use crate::telemetry::{send_log, LogLevel};
 use colored::Colorize;
@@ -63,12 +64,14 @@ pub struct Ground {
 }
 
 /// Layout of a run's ground grids. A projected run takes its size from the
-/// projected rectangle and re-spaces rows to Mercator, so every cell sits on
-/// its block.
+/// projected rectangle. Web Mercator re-spaces the rows; UTM reads every cell
+/// through the inverse projection. Either way every cell sits on its block.
 #[derive(Clone, Debug)]
 pub struct GroundFrame {
     pub world_dims: Option<(usize, usize)>,
-    pub mercator: Option<WebMercatorProjection>,
+    pub projection: Option<WorldProjection>,
+    /// North-west block of the area. Web Mercator derives it from the bbox.
+    pub rect_min: (i32, i32),
     pub pad_blocks: usize,
     pub affine: AffinePolicy,
     /// Where climate is read; `None` is the bbox centre.
@@ -79,7 +82,8 @@ impl GroundFrame {
     pub fn local() -> Self {
         Self {
             world_dims: None,
-            mercator: None,
+            projection: None,
+            rect_min: (0, 0),
             pad_blocks: 0,
             affine: AffinePolicy::Fit,
             climate_anchor: None,
@@ -91,18 +95,21 @@ impl GroundFrame {
         if spec.kind == crate::projection::ProjectionKind::Local {
             return Self::local();
         }
-        let projection = spec.mercator(bbox);
-        let (world_w, world_h) = match spec.transformer(bbox) {
-            Ok((_, rect)) => (
-                (rect.max_x() - rect.min_x() + 1) as usize,
-                (rect.max_z() - rect.min_z() + 1) as usize,
-            ),
+        let projection = spec.frame(bbox);
+        let rect = match spec.transformer(bbox) {
+            Ok((_, rect)) => rect,
             Err(_) => return Self::local(),
         };
+        let (world_w, world_h) = (
+            (rect.max_x() - rect.min_x() + 1) as usize,
+            (rect.max_z() - rect.min_z() + 1) as usize,
+        );
+        let rect_min = (rect.min_x(), rect.min_z());
         match &args.one_world_run {
             Some(run) => Self {
                 world_dims: Some((world_w, world_h)),
-                mercator: Some(projection),
+                projection: Some(projection),
+                rect_min,
                 pad_blocks: crate::one_world::ground_pad_blocks(args.scale) as usize,
                 affine: match run.elevation {
                     Some(affine) => AffinePolicy::Fixed(affine),
@@ -112,7 +119,8 @@ impl GroundFrame {
             },
             None => Self {
                 world_dims: Some((world_w, world_h)),
-                mercator: Some(projection),
+                projection: Some(projection),
+                rect_min,
                 pad_blocks: 0,
                 affine: AffinePolicy::Fit,
                 climate_anchor: None,
@@ -136,15 +144,17 @@ impl GroundFrame {
 
     /// Ecoregions over the area, at the geography the land cover is laid out on.
     fn ecoregions(&self, bbox: &LLBBox, (world_w, world_h): (usize, usize)) -> Option<Arc<EcoMap>> {
-        let map = match &self.mercator {
+        let map = match self.projection {
             Some(proj) => {
-                let x0 = crate::projection::snap_edge(proj.x_for_lon(bbox.min().lng()), false);
-                let z0 = crate::projection::snap_edge(proj.z_for_lat(bbox.max().lat()), false);
-                EcoMap::build(world_w, world_h, (x0, z0), |gx, gz| {
-                    (
-                        proj.lat_for_z(f64::from(z0) + gz),
-                        proj.lon_for_x(f64::from(x0) + gx),
-                    )
+                let (x0, z0) = match proj {
+                    WorldProjection::WebMercator(p) => (
+                        crate::projection::snap_edge(p.x_for_lon(bbox.min().lng()), false),
+                        crate::projection::snap_edge(p.z_for_lat(bbox.max().lat()), false),
+                    ),
+                    WorldProjection::Mcdk(_) => self.rect_min,
+                };
+                EcoMap::build(world_w, world_h, (x0, z0), move |gx, gz| {
+                    proj.inverse(f64::from(x0) + gx, f64::from(z0) + gz)
                 })
             }
             None => {
@@ -169,12 +179,25 @@ impl GroundFrame {
                 dims: (ww, wh, gw, gh),
                 pad: 0,
                 final_dims: (ww, wh),
+                layout: GridLayout::AsFetched,
             };
+        };
+        let mercator = match self.projection {
+            Some(proj @ WorldProjection::Mcdk(_)) => {
+                return self.block_plan(proj, bbox, scale, (world_w, world_h));
+            }
+            Some(WorldProjection::WebMercator(p)) => Some(p),
+            None => None,
+        };
+        let layout = if mercator.is_some() {
+            GridLayout::MercatorRows
+        } else {
+            GridLayout::AsFetched
         };
         let pad = self.pad_blocks;
         let (pw, ph) = (world_w + 2 * pad, world_h + 2 * pad);
         let (_, _, gw, gh) = compute_grid_dims_for_world(pw, ph);
-        if let (Some(proj), true) = (&self.mercator, gw == pw && gh == ph) {
+        if let (Some(proj), true) = (mercator, gw == pw && gh == ph) {
             // Providers sample a bbox edge to edge, so with one cell per block a
             // bbox running from first to last block centre samples every block
             // at its centre.
@@ -196,6 +219,7 @@ impl GroundFrame {
                     dims: (pw, ph, gw, gh),
                     pad,
                     final_dims: (world_w, world_h),
+                    layout,
                 };
             }
         }
@@ -205,8 +229,75 @@ impl GroundFrame {
             dims: (world_w, world_h, gw, gh),
             pad: 0,
             final_dims: (world_w, world_h),
+            layout,
         }
     }
+
+    /// UTM: fetch a lat/lon bbox around every block centre, then read each
+    /// block through the inverse projection. One cell per block, padding
+    /// included, unless the padded grid would be capped.
+    fn block_plan(
+        &self,
+        proj: WorldProjection,
+        bbox: &LLBBox,
+        scale: f64,
+        (world_w, world_h): (usize, usize),
+    ) -> FetchPlan {
+        let pad = self.pad_blocks;
+        let (pw, ph) = (world_w + 2 * pad, world_h + 2 * pad);
+        let (_, _, ow, oh) = compute_grid_dims_for_world(pw, ph);
+        let (pad, (span_w, span_h), (out_w, out_h)) = if ow == pw && oh == ph {
+            (pad, (pw, ph), (pw, ph))
+        } else {
+            let (_, _, ow, oh) = compute_grid_dims_for_world(world_w, world_h);
+            (0, (world_w, world_h), (ow, oh))
+        };
+        let x0 = f64::from(self.rect_min.0) - pad as f64 + 0.5;
+        let z0 = f64::from(self.rect_min.1) - pad as f64 + 0.5;
+        let (x1, z1) = (x0 + (span_w - 1) as f64, z0 + (span_h - 1) as f64);
+        // Output cell i lies where `Ground` looks it up: i * (span - 1) / (out - 1).
+        let step = |span: usize, out: usize| {
+            if out > 1 {
+                (span - 1) as f64 / (out - 1) as f64
+            } else {
+                0.0
+            }
+        };
+        let (sx, sz) = (step(span_w, out_w), step(span_h, out_h));
+        // Two blocks of slack, so no block centre reads past the fetched edge.
+        let lat = proj.inverse((x0 + x1) / 2.0, (z0 + z1) / 2.0).0;
+        let slack = 2.0 / (scale * 111_320.0 * lat.to_radians().cos().max(0.1));
+        let src =
+            crate::projection::enclosing_llbbox(&proj, (x0, z0), (x1, z1), slack).unwrap_or(*bbox);
+        let (bw, bh, gw, gh) = compute_grid_dims(&src, scale);
+        let sampler = BlockSampler::new((out_w, out_h), (gw, gh), &src, move |i, j| {
+            proj.inverse(x0 + i * sx, z0 + j * sz)
+        });
+        FetchPlan {
+            bbox: src,
+            dims: (bw, bh, gw, gh),
+            pad,
+            final_dims: (world_w, world_h),
+            layout: GridLayout::Blocks {
+                sampler,
+                world: (span_w, span_h),
+            },
+        }
+    }
+}
+
+/// How the fetched grids are laid on blocks.
+enum GridLayout {
+    /// As fetched, at equal lat/lon steps.
+    AsFetched,
+    /// Rows re-spaced from equal latitude steps to equal Mercator steps.
+    MercatorRows,
+    /// Every cell read through the inverse projection; `world` is the block
+    /// size the resampled grid covers.
+    Blocks {
+        sampler: BlockSampler,
+        world: (usize, usize),
+    },
 }
 
 struct FetchPlan {
@@ -215,6 +306,7 @@ struct FetchPlan {
     dims: (usize, usize, usize, usize),
     pad: usize,
     final_dims: (usize, usize),
+    layout: GridLayout,
 }
 
 impl FetchPlan {
@@ -304,12 +396,23 @@ impl Ground {
         if land_cover.is_none() {
             eprintln!("Land cover fetch failed; generating flat ground without it.");
         }
-        if frame.mercator.is_some() {
-            if let Some(lc) = land_cover.as_mut() {
-                lc.remap_rows_to_mercator(fetch_bbox.max().lat(), fetch_bbox.min().lat());
+        match &plan.layout {
+            GridLayout::AsFetched => {}
+            GridLayout::MercatorRows => {
+                if let Some(lc) = land_cover.as_mut() {
+                    lc.remap_rows_to_mercator(fetch_bbox.max().lat(), fetch_bbox.min().lat());
+                }
+                if let Some(c) = canopy.as_mut() {
+                    c.remap_rows_to_mercator(fetch_bbox.max().lat(), fetch_bbox.min().lat());
+                }
             }
-            if let Some(c) = canopy.as_mut() {
-                c.remap_rows_to_mercator(fetch_bbox.max().lat(), fetch_bbox.min().lat());
+            GridLayout::Blocks { sampler, .. } => {
+                if let Some(lc) = land_cover.as_mut() {
+                    lc.resample(sampler);
+                }
+                if let Some(c) = canopy.as_mut() {
+                    c.resample(sampler);
+                }
             }
         }
         let (world_w, world_h) = plan.final_dims;
@@ -500,14 +603,26 @@ impl Ground {
                     };
                     let mut canopy = canopy_job.and_then(|h| h.join().ok()).flatten();
                     // Providers sample equal latitude steps.
-                    if frame.mercator.is_some() {
-                        let (top, bottom) = (bbox.max().lat(), bbox.min().lat());
-                        elevation_data.remap_rows_to_mercator(top, bottom);
-                        if let Some(lc) = land_cover.as_mut() {
-                            lc.remap_rows_to_mercator(top, bottom);
+                    match &plan.layout {
+                        GridLayout::AsFetched => {}
+                        GridLayout::MercatorRows => {
+                            let (top, bottom) = (bbox.max().lat(), bbox.min().lat());
+                            elevation_data.remap_rows_to_mercator(top, bottom);
+                            if let Some(lc) = land_cover.as_mut() {
+                                lc.remap_rows_to_mercator(top, bottom);
+                            }
+                            if let Some(c) = canopy.as_mut() {
+                                c.remap_rows_to_mercator(top, bottom);
+                            }
                         }
-                        if let Some(c) = canopy.as_mut() {
-                            c.remap_rows_to_mercator(top, bottom);
+                        GridLayout::Blocks { sampler, world } => {
+                            elevation_data.resample(sampler, *world);
+                            if let Some(lc) = land_cover.as_mut() {
+                                lc.resample(sampler);
+                            }
+                            if let Some(c) = canopy.as_mut() {
+                                c.resample(sampler);
+                            }
                         }
                     }
                     let (final_w, final_h) = plan.final_dims;
@@ -1810,12 +1925,17 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod frame_tests {
     use super::*;
-    use crate::projection::{llbbox_for_rect, snap_bbox_to_chunks, WebMercatorProjection};
+    use crate::projection::{
+        llbbox_for_rect, snap_bbox_to_chunks, McdkProjection, WebMercatorProjection,
+    };
 
     fn projected_frame(pad: usize, w: usize, h: usize) -> GroundFrame {
         GroundFrame {
             world_dims: Some((w, h)),
-            mercator: Some(WebMercatorProjection::new(48.1372, 11.5755, 1.0)),
+            projection: Some(WorldProjection::WebMercator(WebMercatorProjection::new(
+                48.1372, 11.5755, 1.0,
+            ))),
+            rect_min: (0, 0),
             pad_blocks: pad,
             affine: AffinePolicy::Fit,
             climate_anchor: Some((48.1372, 11.5755)),
@@ -1836,8 +1956,9 @@ mod frame_tests {
     #[test]
     fn a_padded_plan_fetches_the_rect_plus_the_margin_and_crops_back() {
         let proj = WebMercatorProjection::new(48.1372, 11.5755, 1.0);
+        let frame = WorldProjection::WebMercator(proj);
         let req = LLBBox::new(48.13, 11.56, 48.14, 11.58).unwrap();
-        let (rect, eff) = snap_bbox_to_chunks(&proj, &req).unwrap();
+        let (rect, eff) = snap_bbox_to_chunks(&frame, &req).unwrap();
         let w = (rect.max_x() - rect.min_x() + 1) as usize;
         let h = (rect.max_z() - rect.min_z() + 1) as usize;
         let plan = projected_frame(100, w, h).fetch_plan(&eff, 1.0);
@@ -1851,7 +1972,8 @@ mod frame_tests {
             rect.max_z() + 100,
         )
         .unwrap();
-        let outer = llbbox_for_rect(&proj, &grown).unwrap();
+        assert!(matches!(plan.layout, GridLayout::MercatorRows));
+        let outer = llbbox_for_rect(&frame, &grown).unwrap();
         assert!(plan.bbox.min().lat() > outer.min().lat());
         assert!(plan.bbox.max().lng() < outer.max().lng());
         // First and last samples sit on the outermost block centres.
@@ -1866,12 +1988,77 @@ mod frame_tests {
     #[test]
     fn padding_is_dropped_when_the_grid_would_be_capped() {
         let side = crate::elevation::MAX_ELEVATION_GRID_DIM;
-        let proj = WebMercatorProjection::new(0.0, 0.0, 1.0);
+        let proj = WorldProjection::WebMercator(WebMercatorProjection::new(0.0, 0.0, 1.0));
         let rect = XZBBox::rect_from_min_max(0, 0, side as i32 - 1, 15).unwrap();
         let eff = llbbox_for_rect(&proj, &rect).unwrap();
         let plan = projected_frame(100, side, 16).fetch_plan(&eff, 1.0);
         assert_eq!(plan.pad, 0);
         assert_eq!(plan.final_dims, (side, 16));
+    }
+
+    fn mcdk_frame(pad: usize, rect: &XZBBox) -> GroundFrame {
+        GroundFrame {
+            world_dims: Some((
+                (rect.max_x() - rect.min_x() + 1) as usize,
+                (rect.max_z() - rect.min_z() + 1) as usize,
+            )),
+            projection: Some(WorldProjection::Mcdk(McdkProjection::new(1.0))),
+            rect_min: (rect.min_x(), rect.min_z()),
+            pad_blocks: pad,
+            affine: AffinePolicy::Fit,
+            climate_anchor: None,
+        }
+    }
+
+    #[test]
+    fn a_utm_plan_reads_every_block_centre_inside_the_fetched_grid() {
+        // A 1024-block cell in Slagelse.
+        let rect = XZBBox::rect_from_min_max(48128, 56832, 49151, 57855).unwrap();
+        let proj = WorldProjection::Mcdk(McdkProjection::new(1.0));
+        let eff = llbbox_for_rect(&proj, &rect).unwrap();
+        let plan = mcdk_frame(96, &rect).fetch_plan(&eff, 1.0);
+        assert_eq!(plan.pad, 96);
+        assert_eq!(plan.final_dims, (1024, 1024));
+        let GridLayout::Blocks { sampler, world } = &plan.layout else {
+            panic!("a UTM frame resamples per block");
+        };
+        assert_eq!(*world, (1216, 1216));
+        assert_eq!((sampler.out_w, sampler.out_h), (1216, 1216));
+        let (_, _, gw, gh) = plan.dims;
+        let (s, w) = (plan.bbox.min().lat(), plan.bbox.min().lng());
+        let (n, e) = (plan.bbox.max().lat(), plan.bbox.max().lng());
+        for (i, j) in [(0, 0), (1215, 0), (0, 1215), (1215, 1215), (700, 333)] {
+            let (c, r) = sampler.at(i, j);
+            assert!(
+                c > 0.0 && c < (gw - 1) as f64,
+                "{i},{j}: column {c} of {gw}"
+            );
+            assert!(r > 0.0 && r < (gh - 1) as f64, "{i},{j}: row {r} of {gh}");
+            // The cell reads the lat/lon of its own block centre.
+            let bx = (rect.min_x() - 96 + i as i32) as f64 + 0.5;
+            let bz = (rect.min_z() - 96 + j as i32) as f64 + 0.5;
+            let (lat, lon) = proj.inverse(bx, bz);
+            let want_c = (lon - w) / (e - w) * (gw - 1) as f64;
+            let want_r = (n - lat) / (n - s) * (gh - 1) as f64;
+            assert!((c - want_c).abs() < 1e-3 && (r - want_r).abs() < 1e-3);
+        }
+        // A field that grows north and east reads back at each block centre.
+        let field = |lat: f64, lon: f64| ((lat - s) * 1e4 + (lon - w) * 1e3) as f32;
+        let grid: Vec<Vec<f32>> = (0..gh)
+            .map(|r| {
+                let lat = n - (n - s) * r as f64 / (gh - 1) as f64;
+                (0..gw)
+                    .map(|c| field(lat, w + (e - w) * c as f64 / (gw - 1) as f64))
+                    .collect()
+            })
+            .collect();
+        let out = sampler.rows(|c, r| crate::grid_ops::bilinear(&grid, c, r));
+        for (i, j) in [(10, 10), (608, 608), (1200, 50)] {
+            let bx = (rect.min_x() - 96 + i as i32) as f64 + 0.5;
+            let bz = (rect.min_z() - 96 + j as i32) as f64 + 0.5;
+            let (lat, lon) = proj.inverse(bx, bz);
+            assert!((out[j][i] - field(lat, lon)).abs() < 0.01, "{i},{j}");
+        }
     }
 
     #[test]
@@ -1893,7 +2080,7 @@ mod frame_tests {
         ]);
         let bbox = LLBBox::new(48.13, 11.56, 48.14, 11.58).unwrap();
         let frame = GroundFrame::from_args(&mercator, &bbox);
-        assert!(frame.mercator.is_some());
+        assert!(frame.projection.is_some());
         assert_eq!(frame.pad_blocks, 0);
         assert_eq!(frame.affine, AffinePolicy::Fit);
         let (_, rect) = crate::projection::ProjectionSpec::from_args(&mercator)

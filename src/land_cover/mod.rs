@@ -170,6 +170,22 @@ impl LandCoverData {
         self.invalidate_water_blend_grid();
     }
 
+    /// Re-lays the grid on blocks through `sampler`; classes do not blend.
+    pub fn resample(&mut self, sampler: &crate::grid_ops::BlockSampler) {
+        let (w, h) = (self.width, self.height);
+        let pick = |grid: &Vec<Vec<u8>>| {
+            sampler.rows(|c, r| {
+                let (x, z) = crate::grid_ops::nearest_index(c, r, w, h);
+                grid[z][x]
+            })
+        };
+        self.grid = pick(&self.grid);
+        self.water_distance = pick(&self.water_distance);
+        self.width = sampler.out_w;
+        self.height = sampler.out_h;
+        self.invalidate_water_blend_grid();
+    }
+
     pub fn crop(&mut self, x0: usize, z0: usize, width: usize, height: usize) {
         crate::grid_ops::crop_rows(&mut self.grid, x0, z0, width, height);
         crate::grid_ops::crop_rows(&mut self.water_distance, x0, z0, width, height);

@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import mcdk
 import meld_bridge as bridge
 
 
@@ -57,7 +58,7 @@ class BridgeTests(unittest.TestCase):
         for doc in (base, {**base, 'world_height': 'earth'}):
             self.assertNotIn('--one-world-height', bridge.command(doc, cell, Path('job'), Path('b.json')))
         with patch.object(bridge, 'external_meld', return_value=(None, {})):
-            for schema in (1, 2, bridge.SCHEMA):
+            for schema in (1, 2, 3, 4, bridge.SCHEMA):
                 bridge.verify_inputs({'schema': schema, 'meld_source': 'meld', 'meld_hashes': {}})
             with self.assertRaisesRegex(ValueError, 'Unsupported'):
                 bridge.verify_inputs({'schema': bridge.SCHEMA + 1, 'meld_source': 'meld', 'meld_hashes': {}})
@@ -69,7 +70,7 @@ class BridgeTests(unittest.TestCase):
             binary.write_bytes(b'fake')
             cells = [{'cell_key': '0', 'bbox': {'south': 55, 'west': 11, 'north': 55.005, 'east': 11.01}}]
             grid = argparse.Namespace(cells_for_bbox=lambda *a, **kw: cells)
-            args = argparse.Namespace(scale=1, cell_regions=2, max_cells=1, threads=1,
+            args = argparse.Namespace(scale=1, cell_regions=2, max_cells=1, threads=1, frame='meld',
                                       job=root / 'job', bbox='55,11,55.005,11.01', meld_source=root,
                                       arnis=binary, danish_buildings=None, osm_file=None, caves=False,
                                       signage='full', land_mask=None, coast_buffer_m=2000, keep_bbox=[])
@@ -79,6 +80,78 @@ class BridgeTests(unittest.TestCase):
             probe.assert_called_once_with(binary.resolve(), ['--one-world-height', 'vanilla'])
             doc = bridge.read_json(args.job / 'plan.json')
             self.assertEqual((doc['schema'], doc['world_height']), (bridge.SCHEMA, 'vanilla'))
+
+    def test_mcdk_cells_are_whole_regions_at_the_minecraftdanmark_coordinates(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            binary = root / 'arnis'
+            binary.write_bytes(b'fake')
+            # Slagelse town.
+            args = argparse.Namespace(scale=1, cell_regions=2, max_cells=100, threads=1,
+                                      job=root / 'job', bbox='55.38167,11.30991,55.43070,11.41153',
+                                      arnis=binary, danish_buildings=None, osm_file=None, caves=False,
+                                      signage='full', land_mask=None, coast_buffer_m=2000, keep_bbox=[])
+            with patch.object(bridge, 'external_meld') as meld, \
+                    patch.object(bridge, 'probe') as probe, patch('fetch.bounds'):
+                bridge.plan(args)
+            meld.assert_not_called()
+            probe.assert_called_once_with(binary.resolve(),
+                                          ['--one-world-height', 'vanilla', '--block-rect'])
+            doc = bridge.read_json(args.job / 'plan.json')
+            self.assertEqual((doc['frame'], doc['meld_source']), ('mcdk', None))
+            rects = [c['rect'] for c in doc['cells']]
+            self.assertEqual(len(rects), 42)
+            for x0, z0, x1, z1 in rects:
+                self.assertEqual((x0 % 16, z0 % 16, (x1 + 1) % 16, (z1 + 1) % 16), (0, 0, 0, 0))
+                # Inner edges fall on the 1024-block grid, so cells never share a region file.
+                self.assertEqual(x0 // 1024, x1 // 1024)
+                self.assertEqual(z0 // 1024, z1 // 1024)
+            covered = sum((x1 - x0 + 1) * (z1 - z0 + 1) for x0, z0, x1, z1 in rects)
+            x0, z0 = min(r[0] for r in rects), min(r[1] for r in rects)
+            x1, z1 = max(r[2] for r in rects), max(r[3] for r in rects)
+            self.assertEqual(covered, (x1 - x0 + 1) * (z1 - z0 + 1), 'cells overlap or leave gaps')
+            # The town centre at its /atp coordinates.
+            self.assertTrue(x0 <= 49051 <= x1 and z0 <= 57773 <= z1)
+            cell = next(c for c in doc['cells'] if c['rect'][0] <= 49051 <= c['rect'][2]
+                        and c['rect'][1] <= 57773 <= c['rect'][3])
+            self.assertEqual(cell['rect'], [48128, 57344, 49151, 58367])
+            s, w, n, e = cell['bbox']
+            self.assertTrue(s < 55.4036 < n and w < 11.354 < e)
+            self.assertTrue(bridge.contains(cell['data_bbox'], cell['bbox']))
+            cmd = bridge.command(doc, cell, args.job, Path('b.json'))
+            self.assertEqual(cmd[cmd.index('--projection') + 1], 'mcdk')
+            self.assertEqual(cmd[cmd.index('--block-rect') + 1], '48128,57344,49151,58367')
+            bridge.verify_inputs({**doc, 'arnis': None})
+
+    def test_mcdk_frame_matches_pyproj(self):
+        # pyproj 3.8, EPSG:4258 -> EPSG:25832.
+        for lat, lon, e, n in [(55.8333, 10.6, 600212.8016142369, 6188684.441020456),
+                               (55.1009, 14.7066, 863917.8358138121, 6120903.692376184),
+                               (57.7209, 10.5839, 594345.2578742233, 6398740.409466657)]:
+            pe, pn = mcdk.utm32(lat, lon)
+            self.assertAlmostEqual(pe, e, places=4)
+            self.assertAlmostEqual(pn, n, places=4)
+            la, lo = mcdk.utm32_inverse(e, n)
+            self.assertAlmostEqual(la, lat, places=9)
+            self.assertAlmostEqual(lo, lon, places=9)
+        x, z = mcdk.block(55.4036, 11.354)
+        self.assertEqual((int(x // 1), int(z // 1)), (49051, 57773))
+        s, w, n, e = mcdk.rect_bbox([0, 0, 1023, 1023], 1)
+        for bx, bz in [(0, 0), (1024, 0), (0, 1024), (1024, 1024)]:
+            lat, lon = mcdk.latlon(bx, bz)
+            self.assertTrue(s <= lat <= n and w <= lon <= e)
+
+    def test_mcdk_result_is_checked_in_blocks(self):
+        with tempfile.TemporaryDirectory() as name:
+            world = Path(name)
+            (world/'level.dat').write_bytes(b'test')
+            bridge.atomic_json(world/'arnis_one_world.json', {'areas': [
+                {'min_lat': 55, 'min_lon': 11, 'max_lat': 55.01, 'max_lon': 11.01,
+                 'min_x': 0, 'min_z': 0, 'max_x': 1023, 'max_z': 1023}]})
+            bridge.validate_result(world, {'bbox': [54, 10, 56, 12], 'rect': [0, 0, 1023, 1023]})
+            with self.assertRaisesRegex(ValueError, 'does not cover'):
+                bridge.validate_result(world, {'bbox': [55, 11, 55.001, 11.001],
+                                               'rect': [1024, 0, 2047, 1023]})
 
     def test_resume_skips_completed_cells_and_retries_failed_cells(self):
         with tempfile.TemporaryDirectory() as name:

@@ -98,6 +98,17 @@ impl ElevationData {
         );
     }
 
+    /// Re-lays the grid on blocks through `sampler`, blending heights.
+    /// `world` is the block size the new grid covers.
+    pub fn resample(&mut self, sampler: &crate::grid_ops::BlockSampler, world: (usize, usize)) {
+        let heights = &self.heights;
+        let fresh = sampler.rows(|c, r| crate::grid_ops::bilinear(heights, c, r));
+        self.heights = fresh;
+        self.width = sampler.out_w;
+        self.height = sampler.out_h;
+        (self.world_width, self.world_height) = world;
+    }
+
     /// Only meaningful while one cell is one block.
     pub fn crop(&mut self, x0: usize, z0: usize, width: usize, height: usize) {
         crate::grid_ops::crop_rows(&mut self.heights, x0, z0, width, height);

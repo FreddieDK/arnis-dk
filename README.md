@@ -24,6 +24,7 @@ integration focuses on buildings and addresses.
 - Supports Arnis features such as terrain, caves and road signs.
 - Keeps coastal water and mapped bridges when skipping open sea: a 2,000-metre coastal buffer and 2,000 metres on each side of bridges.
 - Seals the finished Meld world’s underground void edge with two layers of bedrock, without walls between generated cells.
+- Places new Meld worlds at the [coordinates of the classic minecraftdanmark.dk map](#coordinates), so an address has the same X and Z as `/atp` gives.
 
 Entrance positions depend on the source data. Facade points are placement hints,
 not surveyed door locations; exact doors and building heights are not guaranteed.
@@ -61,6 +62,25 @@ use the normal build height; see [survival servers](#survival-servers).
 An optional [land mask](danish_data/OCEAN.md) skips open-sea cells, leaving void
 between land areas. Country-border restrictions require a suitable selection;
 the ocean filter alone does not exclude neighbouring countries.
+
+## Coordinates
+
+New Meld jobs use the coordinates of the classic minecraftdanmark.dk map: UTM
+zone 32 (EPSG:25832) with X = easting − 600,000 and Z = 6,200,000 − northing, one
+block per metre. (0, 0) lies near Samsø and north is −Z. A building therefore
+stands at the X and Z that `/atp` gives for its address, and cells of whole
+region files tile Denmark without gaps or overlaps.
+
+- **Scale.** UTM keeps a metre within 0.1 % of a block across Denmark. The
+  earlier Web Mercator frame was exact only at its origin; with the origin in
+  Slagelse, Skagen came out 6 % too large.
+- **North.** In-game north is grid north, which turns against true north from
+  0° in western Jutland to about 3° in Copenhagen and 5° on Bornholm, as on the
+  classic map.
+- **Existing worlds.** A One World keeps the frame it was created with and is
+  never converted. Plan with `--frame meld` for the earlier Web Mercator grid.
+- **CLI.** `--one-world --projection mcdk` creates such a world;
+  `--block-rect min_x,min_z,max_x,max_z` adds an exact block rectangle to it.
 
 ## Survival servers
 

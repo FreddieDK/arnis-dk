@@ -57,8 +57,19 @@ pub struct Args {
     /// Projection mode for coordinate mapping.
     /// local: each generation starts at Minecraft (0,0) (default).
     /// web_mercator: Web Mercator centred on the bbox.
+    /// mcdk: the coordinates of the classic minecraftdanmark.dk map, UTM zone 32N
+    /// with X = E - 600000 and Z = 6200000 - N, so (0,0) lies near Samsoe. Picks
+    /// the frame of a new --one-world; an existing One World keeps its own.
     #[arg(long, default_value = "local")]
     pub projection: crate::projection::ProjectionKind,
+
+    /// One World area as a block rectangle min_x,min_z,max_x,max_z, grown to whole
+    /// chunks. It replaces the area --bbox would give; --bbox is still needed and
+    /// is then widened to cover the rectangle. In the mcdk frame a lat/lon bbox and
+    /// a block rectangle differ slightly, so neighbouring areas tile exactly only
+    /// when given as rectangles.
+    #[arg(long, allow_hyphen_values = true, value_parser = parse_block_rect)]
+    pub block_rect: Option<[i32; 4]>,
 
     /// Generate into one persistent Java world that every later run extends.
     /// --output-dir is then the saves folder. The first run fixes scale, ground
@@ -704,6 +715,24 @@ pub const DEFAULT_WORLD_TIME: i64 = 6_000;
 /// Minecraft tick for midnight (tick 0 is 06:00).
 pub const MIDNIGHT_TICKS: i64 = 18_000;
 
+/// `min_x,min_z,max_x,max_z` in blocks.
+fn parse_block_rect(text: &str) -> Result<[i32; 4], String> {
+    let values: Vec<i32> = text
+        .split(',')
+        .map(|v| v.trim().parse::<i32>())
+        .collect::<Result<_, _>>()
+        .map_err(|_| format!("expected four whole block numbers, got '{text}'"))?;
+    let [x0, z0, x1, z1] = values[..] else {
+        return Err(format!("expected min_x,min_z,max_x,max_z, got '{text}'"));
+    };
+    if x1 < x0 || z1 < z0 {
+        return Err(format!(
+            "'{text}' is empty: the maximum must not be below the minimum"
+        ));
+    }
+    Ok([x0, z0, x1, z1])
+}
+
 pub fn validate_args(args: &Args) -> Result<(), String> {
     // Moon/Mars scale is ours, and sits below MIN_SCALE by design.
     if args.body.is_earth() {
@@ -753,6 +782,13 @@ pub fn validate_args(args: &Args) -> Result<(), String> {
         return Err("--world-name only applies to --one-world.".to_string());
     } else if args.one_world_height != OneWorldHeight::Earth {
         return Err("--one-world-height only applies to --one-world.".to_string());
+    } else if args.block_rect.is_some() {
+        return Err("--block-rect only applies to --one-world.".to_string());
+    } else if args.projection == crate::projection::ProjectionKind::Mcdk {
+        return Err(
+            "--projection mcdk places areas at fixed world coordinates, so it needs --one-world."
+                .to_string(),
+        );
     }
     if args.projection == crate::projection::ProjectionKind::WebMercator && !args.one_world {
         println!(
