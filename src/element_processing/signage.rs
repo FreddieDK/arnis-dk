@@ -892,6 +892,13 @@ fn place_wall_panel(
         let (cx, cz) = (lx + rx * c, lz + rz * c);
         (cx - fx * depth, cz - fz * depth)
     };
+    // A frame just past either end would run two plates together into one name.
+    let touches_a_plate = |depth: i32| {
+        [-1, cols].into_iter().any(|c| {
+            let (hx, hz) = host_at(c, depth);
+            editor.cell_has_frame(hx + fx, y, hz + fz)
+        })
+    };
 
     // One depth for the whole plate, else a diagonal wall staggers the tiles. Nearest
     // first, and a farther depth must win by more than one column to be taken.
@@ -903,7 +910,7 @@ fn place_wall_panel(
             let (hx, hz) = host_at(c, depth);
             let (px, pz) = (hx + fx, hz + fz);
             // The frame's own cell must be free and above the terrain, or it is culled.
-            if !editor.cell_open_at(px, y, pz) || y - editor.get_absolute_y(px, 0, pz) < 1 {
+            if !editor.frame_cell_free(px, y, pz) || y - editor.get_absolute_y(px, 0, pz) < 1 {
                 usable = false;
                 break;
             }
@@ -911,7 +918,7 @@ fn place_wall_panel(
                 solid += 1;
             }
         }
-        if !usable {
+        if !usable || touches_a_plate(depth) {
             continue;
         }
         if solid == cols {
@@ -1008,7 +1015,12 @@ fn split_lines(text: &str, max_len: usize, max_lines: usize) -> Vec<String> {
     lines
 }
 
-/// Name plate on the anchor block, retried one row up when the cell in front is taken.
+/// How far a name plate may slide along the wall when its own spot is taken.
+const FACADE_SIGN_SLIDE: i32 = 6;
+
+/// Name plate on the anchor block, retried one row up when the cell in front is
+/// taken, then slid along the wall, nearest first: two shops behind one wall
+/// would otherwise put their plates on the same spot.
 fn place_facade_sign(
     editor: &mut WorldEditor,
     ax: i32,
@@ -1017,7 +1029,11 @@ fn place_facade_sign(
     facing: i8,
     name: &NameSign,
 ) -> bool {
+    let (rx, rz) = right_dir(facing);
     (0..2).any(|dy| place_name_sign(editor, ax, y + dy, az, facing, name))
+        || (1..=FACADE_SIGN_SLIDE)
+            .flat_map(|k| [k, -k])
+            .any(|k| place_name_sign(editor, ax + rx * k, y, az + rz * k, facing, name))
 }
 
 /// Viewer's right for a wall facing.
@@ -2259,6 +2275,49 @@ mod tests {
                 .map(|b| b.name().to_string()),
             Some("stone_bricks".to_string())
         );
+    }
+
+    /// The owner's report: two shops behind one wall, both plates on one spot.
+    #[test]
+    fn a_second_plate_never_covers_or_touches_the_first() {
+        let xzbbox = XZBBox::rect_from_xz_lengths(40.0, 40.0).unwrap();
+        let mut editor = crate::element_processing::building_test_support::test_editor(&xzbbox);
+        let first = DecalKey::text(TextStyle::Fascia, "Thai Kitchen", 3);
+        let second = DecalKey::text(TextStyle::Fascia, "Corner Cafe", 3);
+        let ctx = std::sync::Arc::new(test_ctx(vec![first.clone(), second.clone()]));
+        editor.set_map_decals(true);
+        editor.set_signage(std::sync::Arc::clone(&ctx));
+        // One storey of wall, so the row above is not there to escape to.
+        for x in 5..35 {
+            for y in 1..=4 {
+                editor.set_block_absolute(STONE_BRICKS, x, y, 20, None, None);
+            }
+        }
+        let decal = |key: &DecalKey| NameSign::Decal(key.clone());
+        assert!(place_facade_sign(&mut editor, 20, 4, 20, 2, &decal(&first)));
+        assert!(place_facade_sign(
+            &mut editor,
+            20,
+            4,
+            20,
+            2,
+            &decal(&second)
+        ));
+
+        let a = placed_tiles(&editor, &ctx, &first);
+        let b = placed_tiles(&editor, &ctx, &second);
+        assert_eq!((a.len(), b.len()), (3, 3), "{a:?} {b:?}");
+        let cells = |t: &[(i32, i32, i32, i32)]| -> Vec<(i32, i32, i32)> {
+            t.iter().map(|&(_, x, y, z)| (x, y, z)).collect()
+        };
+        for (x, y, z) in cells(&b) {
+            assert!(
+                cells(&a)
+                    .iter()
+                    .all(|&(ax, ay, az)| (ay, az) != (y, z) || (ax - x).abs() > 1),
+                "plates overlap or touch: {a:?} {b:?}"
+            );
+        }
     }
 
     #[test]

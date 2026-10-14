@@ -751,6 +751,12 @@ impl<'a> WorldEditor<'a> {
         !self.frame_cells.is_empty() && self.frame_cells.contains(&(x, abs_y, z))
     }
 
+    /// True if a new frame can hang here: an open cell no frame holds yet, so
+    /// one sign never lands on top of another.
+    pub fn frame_cell_free(&self, x: i32, abs_y: i32, z: i32) -> bool {
+        self.cell_is_open(x, abs_y, z) && !self.cell_has_frame(x, abs_y, z)
+    }
+
     /// Whether Java entities (item frame decals, facade panels) are written.
     #[inline]
     pub fn map_decals_enabled(&self) -> bool {
@@ -790,7 +796,7 @@ impl<'a> WorldEditor<'a> {
         if rel_y < 1 {
             return false;
         }
-        if require_air && !self.cell_is_open(fx, fy, fz) {
+        if require_air && !self.frame_cell_free(fx, fy, fz) {
             return false;
         }
 
@@ -934,7 +940,7 @@ impl<'a> WorldEditor<'a> {
                 if !self.xzbbox.contains(&XZPoint::new(fx, fz)) || self.is_region_flushed(fx, fz) {
                     return false;
                 }
-                if fy - self.get_absolute_y(fx, 0, fz) < 1 || !self.cell_is_open(fx, fy, fz) {
+                if fy - self.get_absolute_y(fx, 0, fz) < 1 || !self.frame_cell_free(fx, fy, fz) {
                     return false;
                 }
                 if require_hosts && self.cell_is_open(hx, hy, hz) {
