@@ -19,6 +19,7 @@ integration focuses on buildings and addresses.
 - Improves entrance placement and adds full addresses on ordinary Minecraft signs.
 - Reduces generated trees in urban areas while preserving forest density.
 - Grows real garden hedges and scrub where GeoDanmark and the height model show them: never inside buildings or on paving, each hedge in a one-block strip of lawn.
+- Builds wind turbines at their real size from OpenStreetMap (hub height, rotor diameter, tip height; typical Danish size when untagged), shrunk only where they would reach the build height.
 - Renders agricultural fields as grass with sparse short grass, small flower patches and occasional low shrubs, without generated crops, hay bales or irrigation dots; mapped roads, waterways and hedges remain.
 - Keeps worlds fair for [survival servers](#survival-servers): no valuable blocks, vanilla ore amounts and the normal build height for Geyser players.
 - Supports Arnis features such as terrain, caves and road signs.

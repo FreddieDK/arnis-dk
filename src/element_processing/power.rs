@@ -13,7 +13,7 @@ use crate::world_editor::WorldEditor;
 use std::collections::HashMap;
 use std::time::Duration;
 
-/// True for wind generators the freestanding turbine schematic misrepresents:
+/// True for wind generators a freestanding three-blade turbine misrepresents:
 /// mounted on a structure or micro scale, like the rooftop units on the Eiffel Tower.
 fn is_mounted_or_micro_turbine(tags: &HashMap<String, String>) -> bool {
     let positive_number = |key: &str| {
@@ -124,7 +124,12 @@ fn generate_generator(
             if n == 0 {
                 return;
             }
-            crate::structures::windturbine::place(editor, (sx / n) as i32, (sz / n) as i32);
+            crate::structures::windturbine::place(
+                editor,
+                (sx / n) as i32,
+                (sz / n) as i32,
+                element.tags(),
+            );
         }
         Some("solar") => {
             if let ProcessedElement::Way(way) = element {
@@ -220,7 +225,7 @@ pub fn generate_power_nodes(editor: &mut WorldEditor, node: &ProcessedNode) {
                 if node.tags.get("generator:source").map(|s| s.as_str()) == Some("wind")
                     && !is_mounted_or_micro_turbine(&node.tags) =>
             {
-                crate::structures::windturbine::place(editor, node.x, node.z);
+                crate::structures::windturbine::place(editor, node.x, node.z, &node.tags);
             }
             _ => {}
         }
