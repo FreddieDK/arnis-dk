@@ -4,7 +4,7 @@ The country is a GeoJSON (Multi)Polygon in WGS84 that includes its territorial
 waters, such as the OpenStreetMap boundary of Denmark (relation 50046). Land is
 the planner's land mask. Foreign land is land outside the country, so a coastline
 that differs between the two never counts as foreign: only another country's land
-does. Cells are block rectangles in the minecraftdanmark.dk frame.
+does. Cells are block rectangles in the UTM zone 32 frame.
 """
 import json
 from pathlib import Path

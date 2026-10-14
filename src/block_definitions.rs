@@ -1696,7 +1696,7 @@ pub fn get_stair_block_for_material(material: Block) -> Block {
 }
 
 /// Arnis-DK: blocks worth too much on a survival server to give away in bulk
-/// (MinecraftDanmark's /sælg prices), each with the look-alike written in its place.
+/// (a survival server's sell prices), each with the look-alike written in its place.
 /// Look-alikes are cheap blocks: concrete, terracotta, stone and non-flammable nether
 /// wood. Generation keeps using the originals internally; only the saved world changes.
 pub const LOOK_ALIKES: [(Block, Block); 18] = [

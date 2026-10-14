@@ -81,7 +81,7 @@ class BridgeTests(unittest.TestCase):
             doc = bridge.read_json(args.job / 'plan.json')
             self.assertEqual((doc['schema'], doc['world_height']), (bridge.SCHEMA, 'vanilla'))
 
-    def test_mcdk_cells_are_whole_regions_at_the_minecraftdanmark_coordinates(self):
+    def test_utm_cells_are_whole_regions_at_fixed_block_coordinates(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             binary = root / 'arnis'
@@ -110,7 +110,7 @@ class BridgeTests(unittest.TestCase):
             x0, z0 = min(r[0] for r in rects), min(r[1] for r in rects)
             x1, z1 = max(r[2] for r in rects), max(r[3] for r in rects)
             self.assertEqual(covered, (x1 - x0 + 1) * (z1 - z0 + 1), 'cells overlap or leave gaps')
-            # The town centre at its /atp coordinates.
+            # The town centre at X = E - 600000, Z = 6200000 - N.
             self.assertTrue(x0 <= 49051 <= x1 and z0 <= 57773 <= z1)
             cell = next(c for c in doc['cells'] if c['rect'][0] <= 49051 <= c['rect'][2]
                         and c['rect'][1] <= 57773 <= c['rect'][3])

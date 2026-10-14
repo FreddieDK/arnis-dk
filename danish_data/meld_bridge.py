@@ -16,7 +16,7 @@ import types
 # 2: older runners must not generate skipped_ocean cells. 3: older runners
 # would ignore world_height and create the world with the extended height.
 # 4: older runners would leave out the hedges. 5: older runners would plant
-# minecraftdanmark.dk cells in a Web Mercator world. 6: older runners would
+# UTM frame cells in a Web Mercator world. 6: older runners would
 # leave another country's land standing in border cells.
 SCHEMA = 6
 WORLD_NAME = 'Arnis-DK Meld'
@@ -86,7 +86,7 @@ def height_flags(document):
 
 
 def frame_flags(cell):
-    """Cells planned on the minecraftdanmark.dk grid are exact block rectangles."""
+    """Cells planned on the UTM block grid are exact block rectangles."""
     rect = cell.get('rect')
     if not rect:
         return []
@@ -94,7 +94,7 @@ def frame_flags(cell):
 
 
 def mcdk_cells(bounds, scale, regions):
-    """Cells as squares of whole region files in the minecraftdanmark.dk frame
+    """Cells as squares of whole region files in the UTM zone 32 frame
     (UTM zone 32, X = E - 600000, Z = 6200000 - N), with the lat/lon bbox around each."""
     import mcdk
     return [{'cell_key': f'mcdk {rect[0]},{rect[1]}', 'rect': rect,
@@ -448,7 +448,7 @@ def main():
     commands = parser.add_subparsers(dest='action', required=True)
     p = commands.add_parser('plan', help='Plan the cells; fetch bridge corridors but do not generate a world')
     p.add_argument('--frame', choices=['mcdk', 'meld'], default='mcdk',
-                   help='mcdk: the coordinates of the classic minecraftdanmark.dk map (UTM zone 32, '
+                   help='mcdk: a fixed UTM zone 32 block frame ('
                         'X = E - 600000, Z = 6200000 - N), cells as squares of whole region files '
                         '(default); meld: the Web Mercator grid of an external Meld checkout')
     p.add_argument('--meld-source', type=Path, help='External Meld checkout; needed for --frame meld')

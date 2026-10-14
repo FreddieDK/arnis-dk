@@ -57,7 +57,7 @@ pub struct Args {
     /// Projection mode for coordinate mapping.
     /// local: each generation starts at Minecraft (0,0) (default).
     /// web_mercator: Web Mercator centred on the bbox.
-    /// mcdk: the coordinates of the classic minecraftdanmark.dk map, UTM zone 32N
+    /// mcdk: a fixed frame on UTM zone 32N
     /// with X = E - 600000 and Z = 6200000 - N, so (0,0) lies near Samsoe. Picks
     /// the frame of a new --one-world; an existing One World keeps its own.
     #[arg(long, default_value = "local")]

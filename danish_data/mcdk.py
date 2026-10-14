@@ -1,4 +1,4 @@
-"""The minecraftdanmark.dk block frame: UTM zone 32N (EPSG:25832) with
+"""A fixed block frame on UTM zone 32N (EPSG:25832) with
 X = E - 600000 and Z = 6200000 - N, one block per metre at scale 1.
 
 The Krüger series are those of src/projection/utm.rs (Karney 2011), so the

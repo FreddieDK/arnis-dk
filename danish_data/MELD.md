@@ -6,8 +6,8 @@ Danish buildings, address signs and optional caves. Cells run sequentially,
 with multiple generator threads inside each cell. Interrupted jobs can be
 resumed.
 
-New jobs place cells on the grid of the classic minecraftdanmark.dk map, so
-every building has the X and Z that `/atp` gives for its address (see
+New jobs place cells on a fixed UTM zone 32 grid, so every place in Denmark has
+the same block coordinates in every world (see
 [coordinates](../README.md#coordinates)). Planning with `--frame meld` instead
 uses the Web Mercator grid of an external [Meld](https://github.com/Teddy563/meld)
 checkout: its grid planner only, not its GUI, updater or region-merging
@@ -38,7 +38,7 @@ Planning writes `plan.json` without downloading building/terrain data or
 generating a world. Bounding boxes are **south, west, north, east** in WGS84.
 
 - `--cell-regions 2` uses cells of 1,024 by 1,024 blocks, aligned to the
-  minecraftdanmark.dk grid so that no two cells share a region file. The
+  UTM block grid so that no two cells share a region file. The
   supported range is 1–4 regions per side; edge cells may be smaller. Each cell
   is passed to Arnis as an exact block rectangle with `--block-rect`.
 - `--frame meld --meld-source .local/vendor/meld` plans on Meld's Web Mercator

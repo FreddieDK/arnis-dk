@@ -1,5 +1,5 @@
 //! Transverse Mercator for UTM zone 32N on GRS80 (EPSG:25832), and the block
-//! frame of the classic minecraftdanmark.dk map built on it.
+//! fixed block frame built on it.
 //!
 //! The series are Krüger's to sixth order in n, as given by Karney (2011),
 //! "Transverse Mercator with an accuracy of a few nanometers". Within a few
@@ -124,7 +124,7 @@ impl TransverseMercator {
     }
 }
 
-/// The minecraftdanmark.dk frame: UTM zone 32N with `X = E - 600000` and
+/// A fixed block frame on UTM zone 32N: `X = E - 600000` and
 /// `Z = 6200000 - N`, one block per metre at scale 1, so `(0, 0)` lies near
 /// Samsø and north is -Z. Other scales multiply both axes.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -195,13 +195,13 @@ mod tests {
     }
 
     #[test]
-    fn the_origin_lies_near_samsoe_as_on_minecraftdanmark() {
+    fn the_origin_lies_near_samsoe() {
         let p = McdkProjection::new(1.0);
         let (lat, lon) = p.inverse(0.0, 0.0);
         // pyproj: 55.93497611973894, 10.600782059467294
         assert!((lat - 55.934_976_119_7).abs() < 1e-9, "{lat}");
         assert!((lon - 10.600_782_059_5).abs() < 1e-9, "{lon}");
-        // Slagelse centre, as /atp reports it.
+        // Slagelse centre: E 649051.76, N 6142226.18.
         let (x, z) = p.forward(55.4036, 11.354);
         assert_eq!((x.floor(), z.floor()), (49051.0, 57773.0));
         // Skagen lies north (-Z) and a little west of the origin.

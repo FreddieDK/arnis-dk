@@ -1283,7 +1283,7 @@ $(document).ready(function () {
 
         var data = worldOverlayData;
 
-        // One World: the frame of src/projection, Web Mercator or minecraftdanmark.dk.
+        // One World: the frame of src/projection, Web Mercator or the UTM zone 32 frame.
         if (data.areas) {
             var x, z;
             if (data.frame === 'mcdk') {

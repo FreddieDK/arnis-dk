@@ -27,7 +27,7 @@ pub trait Projection {
 pub enum ProjectionKind {
     /// Web Mercator (EPSG:3857-like) projection with a local origin offset.
     WebMercator,
-    /// UTM zone 32N in the minecraftdanmark.dk frame (`X = E - 600000`,
+    /// UTM zone 32N as a fixed block frame (`X = E - 600000`,
     /// `Z = 6200000 - N`). One World only.
     Mcdk,
     /// Simple local coordinate system (no geographic projection).
@@ -50,7 +50,7 @@ impl FromStr for ProjectionKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "web_mercator" | "webmercator" | "mercator" => Ok(ProjectionKind::WebMercator),
-            "mcdk" | "utm32_mcdk" | "minecraftdanmark" => Ok(ProjectionKind::Mcdk),
+            "mcdk" | "utm32" => Ok(ProjectionKind::Mcdk),
             "local" => Ok(ProjectionKind::Local),
             other => Err(format!("unknown projection kind: '{other}'")),
         }
@@ -557,7 +557,7 @@ mod tests {
             assert!(lat >= eff.min().lat() && lat <= eff.max().lat());
             assert!(lon >= eff.min().lng() && lon <= eff.max().lng());
         }
-        // The town sits where minecraftdanmark.dk has it.
+        // The town sits at X = E - 600000, Z = 6200000 - N.
         assert!(rect.min_x() <= 49051 && rect.max_x() >= 49051);
         assert!(rect.min_z() <= 57773 && rect.max_z() >= 57773);
     }

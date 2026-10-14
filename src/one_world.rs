@@ -1,7 +1,7 @@
 //! One World: one persistent Java world that every generation extends.
 //!
 //! The world pins its frame in the manifest next to `level.dat`: Web Mercator
-//! around an origin, or the minecraftdanmark.dk UTM frame. Every requested area
+//! around an origin, or a fixed UTM zone 32 frame. Every requested area
 //! is snapped outward to whole chunks in that frame and written into the
 //! existing region files, so areas generated at different times line up block
 //! for block.
@@ -28,7 +28,7 @@ pub const DEFAULT_WORLD_NAME: &str = "Arnis One World";
 /// Earth on the extended build height, or sea level at Y 63 on the normal one),
 /// which older builds would not apply.
 pub const MANIFEST_VERSION: u32 = 3;
-/// 4: the world uses the minecraftdanmark.dk frame, which an older build would
+/// 4: the world uses the UTM zone 32 frame, which an older build would
 /// read as Web Mercator. Web Mercator worlds keep writing version 3.
 pub const MCDK_MANIFEST_VERSION: u32 = 4;
 
@@ -40,7 +40,7 @@ pub enum Frame {
     #[default]
     WebMercator,
     /// UTM zone 32N with `X = E - 600000`, `Z = 6200000 - N`: the coordinates of
-    /// the classic minecraftdanmark.dk map. `origin_lat`/`origin_lon` hold its
+    /// the fixed UTM block frame. `origin_lat`/`origin_lon` hold its
     /// (0, 0) near Samsø, which also anchors the climate.
     Mcdk,
 }
@@ -60,7 +60,7 @@ impl Frame {
     fn name(self) -> &'static str {
         match self {
             Frame::WebMercator => "Web Mercator",
-            Frame::Mcdk => "minecraftdanmark.dk (UTM zone 32)",
+            Frame::Mcdk => "UTM zone 32",
         }
     }
 }
@@ -247,7 +247,7 @@ impl Manifest {
         }
         if self.frame == Frame::Mcdk && self.version < MCDK_MANIFEST_VERSION {
             return Err(format!(
-                "the minecraftdanmark.dk frame needs manifest version {MCDK_MANIFEST_VERSION}"
+                "the UTM zone 32 frame needs manifest version {MCDK_MANIFEST_VERSION}"
             ));
         }
         crate::args::validate_scale(self.scale)?;
@@ -531,9 +531,7 @@ fn resolve(
                 }
             }
             let frame = if args.projection == ProjectionKind::Mcdk {
-                println!(
-                    "One World: minecraftdanmark.dk coordinates (UTM zone 32, X = E - 600000, Z = 6200000 - N)."
-                );
+                println!("One World: UTM zone 32 coordinates (X = E - 600000, Z = 6200000 - N).");
                 Frame::Mcdk
             } else {
                 Frame::WebMercator
@@ -550,7 +548,7 @@ fn resolve(
     };
 
     if manifest.frame == Frame::Mcdk && args.projection != ProjectionKind::Mcdk {
-        println!("Note: this One World uses minecraftdanmark.dk coordinates.");
+        println!("Note: this One World uses UTM zone 32 coordinates.");
     }
     args.scale = manifest.scale;
     let projection = manifest.projection();
@@ -570,10 +568,7 @@ fn resolve(
         if corners.iter().any(|&(lat, lon)| {
             !MCDK_LATS.contains(&lat) || (lon - 9.0).abs() > MCDK_MAX_LON_FROM_9E
         }) {
-            return Err(
-                "This area is too far from Denmark for the minecraftdanmark.dk frame (UTM zone 32)."
-                    .to_string(),
-            );
+            return Err("This area is too far from Denmark for the UTM zone 32 frame.".to_string());
         }
     }
 
@@ -893,7 +888,7 @@ mod tests {
     const SLAGELSE: &str = "55.395,11.340,55.410,11.365";
 
     #[test]
-    fn an_mcdk_world_uses_the_minecraftdanmark_coordinates() {
+    fn a_utm_world_uses_the_fixed_utm_block_coordinates() {
         let dir = tempfile::tempdir().unwrap();
         let world = dir.path().join("w");
         let req = LLBBox::from_str(SLAGELSE).unwrap();
@@ -902,7 +897,7 @@ mod tests {
         let manifest = Manifest::load(&world).unwrap().unwrap();
         assert_eq!(manifest.frame, Frame::Mcdk);
         assert_eq!(manifest.version, MCDK_MANIFEST_VERSION);
-        // (0, 0) near Samsø, as on minecraftdanmark.dk.
+        // (0, 0) near Samsø.
         assert_eq!(
             (manifest.origin_lat, manifest.origin_lon),
             (55.9349761, 10.6007821)
@@ -918,7 +913,7 @@ mod tests {
             [area.min_x(), area.min_z(), area.max_x(), area.max_z()],
             run.rect
         );
-        // Slagelse centre lies inside, at its /atp coordinates.
+        // Slagelse centre lies inside, at X = E - 600000, Z = 6200000 - N.
         let (t, _) = crate::projection::ProjectionSpec::from_args(&args)
             .transformer(&session.llbbox)
             .unwrap();
