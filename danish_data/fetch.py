@@ -1,5 +1,6 @@
 """Download a bounded Danish building supplement from Datafordeler GraphQL v2."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
 import math
@@ -47,6 +48,9 @@ def load_key(path=None):
 REQUEST_KM2 = 10
 TILE_KM = 3
 AREA_KM2 = 100
+# Requests in flight at once. A 4 x 4 km town asks for hundreds of batches, each
+# mostly waiting on the service; four at a time keeps the load modest.
+WORKERS = 4
 
 
 def bounds(value, limit=REQUEST_KM2):
@@ -172,14 +176,16 @@ def download_rows(register, where, at, key, transport=request_page):
 
 def linked_rows(register, ids, at, key, transport, field='id_lokalId'):
     ids = sorted({identity(value) for value in ids if identity(value)})
-    result = []
-    for start in range(0, len(ids), 100):
-        batch = ids[start:start+100]
+
+    def batch_rows(batch):
         rows = download_rows(register, {field: {'in': batch}}, at, key, transport)
         if any(identity(row.get(field)) not in batch for row in rows):
             raise ValueError(f'{register}: response contains an unrequested identity')
-        result.extend(rows)
-    return result
+        return rows
+    batches = [ids[start:start+100] for start in range(0, len(ids), 100)]
+    # map() keeps the batches' order, so the result does not depend on timing.
+    with ThreadPoolExecutor(WORKERS) as pool:
+        return [row for rows in pool.map(batch_rows, batches) for row in rows]
 
 
 def fetch(bbox, key, at=None, transport=request_page):
@@ -187,10 +193,12 @@ def fetch(bbox, key, at=None, transport=request_page):
     at = at or datetime.now(timezone.utc)
     if at.tzinfo is None:
         raise ValueError('Snapshot time must have a timezone')
-    outlines = unique([row for wkt in envelopes(bbox) for row in download_rows(
-        'GEODKV', {'geometri': {'intersects': {'wkt': wkt, 'crs': 25832}},
-                   'status': {'eq': 'Anlagt'}, 'geometristatus': {'eq': 'Endelig'}}, at, key, transport)],
-        'GEODKV')
+    def tile_rows(wkt):
+        return download_rows('GEODKV', {'geometri': {'intersects': {'wkt': wkt, 'crs': 25832}},
+                                        'status': {'eq': 'Anlagt'}, 'geometristatus': {'eq': 'Endelig'}},
+                             at, key, transport)
+    with ThreadPoolExecutor(WORKERS) as pool:
+        outlines = unique([row for rows in pool.map(tile_rows, envelopes(bbox)) for row in rows], 'GEODKV')
     converted = []
     for row in outlines:
         if not active(row, 'Anlagt', at) or row.get('geometristatus') != 'Endelig' or row.get('metode3D') == 'Under terræn':

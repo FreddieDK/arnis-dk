@@ -132,7 +132,7 @@ class FetchTests(unittest.TestCase):
             batches.append(ids)
             return page(register, [{'id_lokalId': value} for value in ids])
         result = linked_rows('BBR', [str(n) for n in range(205)] + ['0', None], NOW, 'key', transport)
-        self.assertEqual([len(batch) for batch in batches], [100, 100, 5])
+        self.assertEqual(sorted(len(batch) for batch in batches), [5, 100, 100])
         self.assertEqual(len(result), 205)
         with self.assertRaisesRegex(ValueError, 'unrequested'):
             linked_rows('BBR', ['one'], NOW, 'key', lambda register, *_: page(register, [{'id_lokalId': 'other'}]))
