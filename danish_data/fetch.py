@@ -53,12 +53,23 @@ def bounds(value):
     return numbers
 
 
+ATTEMPTS = 5
+# Datafordeler now and then fails one page of a long pagination with this error, and
+# the same request succeeds a moment later. A dense town cell asks for hundreds of pages.
+TRANSIENT_GRAPHQL = {'Unexpected Execution Error'}
+
+
+def graphql_messages(errors):
+    return sorted({str(e.get('message') if isinstance(e, dict) else e)[:200] for e in errors})
+
+
 def request_page(register, query, variables, key):
     # Never include the authenticated URL or raw HTTP exception in logs/errors.
     endpoint = 'DAR' if register == 'DAR_POINT' else register
     url = f'https://graphql.datafordeler.dk/{endpoint}/v2?' + urlencode({'apiKey': key})
     body = json.dumps({'query': query, 'variables': variables}).encode()
-    for attempt in range(3):
+    for attempt in range(ATTEMPTS):
+        retry = attempt < ATTEMPTS - 1
         request = Request(url, data=body, headers={'Content-Type': 'application/json', 'User-Agent': 'Arnis-DK/0.1'})
         try:
             with urlopen(request, timeout=60) as response:
@@ -67,15 +78,20 @@ def request_page(register, query, variables, key):
                 raise ValueError(f'{register}: response exceeds size limit')
             result = json.loads(raw)
             if result.get('errors'):
-                raise ValueError(f'{register}: GraphQL rejected the query (no partial data accepted)')
+                messages = graphql_messages(result['errors'])
+                if retry and set(messages) <= TRANSIENT_GRAPHQL:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise ValueError(f'{register}: GraphQL rejected the query: {"; ".join(messages)} '
+                                 '(no partial data accepted)')
             return result
         except HTTPError as error:
-            if error.code in (429, 500, 502, 503, 504) and attempt < 2:
+            if error.code in (429, 500, 502, 503, 504) and retry:
                 time.sleep(2 ** attempt)
                 continue
             raise ValueError(f'{register}: HTTP {error.code}; check Datafordeler access/service status') from None
         except (URLError, TimeoutError):
-            if attempt < 2:
+            if retry:
                 time.sleep(2 ** attempt)
                 continue
             raise ValueError(f'{register}: connection failed or timed out') from None

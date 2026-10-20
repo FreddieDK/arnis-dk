@@ -20,6 +20,21 @@ def page(register, rows, more=False, cursor=None):
         'hasNextPage': more, 'endCursor': cursor}}}}
 
 
+class Response:
+    """What urlopen returns, for a JSON document."""
+    def __init__(self, document):
+        self.raw = json.dumps(document).encode()
+
+    def read(self, limit):
+        return self.raw[:limit]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
 class FetchTests(unittest.TestCase):
     def test_access_point_is_joined_by_its_id_with_same_snapshot(self):
         records = {
@@ -166,6 +181,28 @@ class FetchTests(unittest.TestCase):
         self.assertNotIn('secret', str(caught.exception))
         with patch('fetch.urlopen', side_effect=URLError('secret')), patch('fetch.time.sleep'), self.assertRaises(ValueError) as caught:
             request_page('BBR', '{}', {}, 'secret')
+        self.assertNotIn('secret', str(caught.exception))
+
+    def test_a_page_the_service_fails_now_and_then_is_asked_again(self):
+        failed = {'errors': [{'message': 'Unexpected Execution Error', 'path': ['BBR_Bygning']}]}
+        answers = [failed, failed, page('BBR', [{'id_lokalId': 'bbr'}])]
+        with patch('fetch.urlopen', side_effect=lambda *a, **k: Response(answers.pop(0))), \
+                patch('fetch.time.sleep') as sleep:
+            result = request_page('BBR', '{}', {}, 'secret')
+        self.assertEqual(result['data'][ENTITIES['BBR']]['nodes'], [{'id_lokalId': 'bbr'}])
+        self.assertEqual(sleep.call_count, 2)
+        with patch('fetch.urlopen', side_effect=lambda *a, **k: Response(failed)), \
+                patch('fetch.time.sleep'), self.assertRaises(ValueError) as caught:
+            request_page('BBR', '{}', {}, 'secret')
+        self.assertIn('GraphQL rejected the query: Unexpected Execution Error', str(caught.exception))
+
+    def test_a_rejected_query_is_not_asked_again(self):
+        rejected = {'errors': [{'message': 'The field `nope` does not exist'}]}
+        with patch('fetch.urlopen', return_value=Response(rejected)) as opened, \
+                patch('fetch.time.sleep'), self.assertRaises(ValueError) as caught:
+            request_page('BBR', '{}', {}, 'secret')
+        self.assertEqual(opened.call_count, 1)
+        self.assertIn('`nope` does not exist', str(caught.exception))
         self.assertNotIn('secret', str(caught.exception))
 
     def test_failed_serialization_keeps_previous_output(self):
