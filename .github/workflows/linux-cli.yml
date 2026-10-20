@@ -50,7 +50,7 @@ jobs:
           # The data tools import each other; a module left out only fails at run time.
           python -m venv venv
           venv/bin/pip install -q -r danish_data/requirements.txt
-          (cd danish_data && ../venv/bin/python -c 'import fetch, prepare, hedges, meld_bridge, ocean_mask, bridge_mask, national_mask, seal_void_edges, utm32')
+          (cd danish_data && ../venv/bin/python -c 'import fetch, prepare, hedges, store, meld_bridge, ocean_mask, bridge_mask, national_mask, seal_void_edges, utm32')
           venv/bin/python danish_data/fetch.py --help > /dev/null
       - uses: actions/upload-artifact@v7
         with:

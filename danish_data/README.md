@@ -62,6 +62,40 @@ Danish register data themselves. For the GUI, set `ARNIS_DK_BUILDINGS` to the
 supplement's absolute path before launching Arnis. The supplement must cover
 the selected area; the GUI's 3D preview still uses OSM/Overture data.
 
+`fetch.py` prints `progress <phase> <done> <total>` lines while it works, for the
+phases buildings, bbr, addresses, building-addresses, entrances, hedges, heights
+and selecting, so a server can show how far a download has come.
+
+## Local store
+
+A server that makes many worlds can keep the Danish data instead of downloading
+it for each world. `store.py` saves it in tiles of 3 × 3 km on the UTM zone 32 grid
+(EPSG:25832), as gzipped JSON under `<store>/tiles/`. A tile holds, unchanged, what
+`fetch.py` downloads for it: the GeoDanmark buildings touching it with their BBR and
+DAR records, and its hedges and scrub, with every untyped hedge already measured
+against the height model.
+
+```sh
+python danish_data/store.py build --store /srv/arnis-dk-store --bbox "54.55,8.05,57.76,12.80" --bbox "54.98,14.66,55.33,15.21"
+python danish_data/store.py supplement --store /srv/arnis-dk-store --bbox "55.670,12.560,55.675,12.570" --output buildings.json
+```
+
+- `supplement` assembles the supplement `fetch.py` would make for the bbox from the
+  tiles under it, without a download. A record on a tile border is used once; if
+  two tiles disagree, the newer one wins. For a 1.8 × 1.8 km area of Ribe it took
+  5 seconds instead of 70, with the same 25,455 elements.
+- `--fetch-missing` lets `supplement` download and keep the tiles the store lacks,
+  so a store can also fill itself as worlds are made.
+- `build` fetches the tiles of one or more bboxes that the store lacks, two at a
+  time (`--workers`). Stop it and run it again to continue; a failed tile is
+  reported and fetched on the next run. `--older-than DAYS` fetches older tiles
+  again. The two bboxes above cover Denmark and Bornholm in about 12,900 tiles,
+  most of them sea.
+- A town tile is about 0.5 MB, a rural tile far less; Denmark is estimated at
+  1.5–2 GB. Keys come from `--credentials-file` or the environment, as for `fetch.py`.
+- A hedge crossing a tile border is measured in each tile with that tile's
+  buildings; the newer measurement is used.
+
 ## Import existing extracts
 
 `prepare.py` accepts Datafordeler Current JSON entity extracts. Each input must

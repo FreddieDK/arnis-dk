@@ -212,9 +212,11 @@ def linked_rows(register, ids, at, key, transport, field='id_lokalId', phase=Non
         return [row for rows in results for row in rows]
 
 
-def fetch(bbox, key, at=None, transport=request_page, progress=None):
+def fetch(bbox, key, at=None, transport=request_page, progress=None, areas=None):
     """Buildings, BBR and DAR for `bbox`. `progress(phase, done, total)` hears each finished
-    request in the phases buildings, bbr, addresses, building-addresses and entrances."""
+    request in the phases buildings, bbr, addresses, building-addresses and entrances.
+    `areas` replaces the building queries' rectangles with given EPSG:25832 WKT polygons
+    of at most REQUEST_KM2 each, such as one tile of a local store."""
     bbox = bounds(','.join(map(str, bbox)), AREA_KM2)
     at = at or datetime.now(timezone.utc)
     if at.tzinfo is None:
@@ -223,7 +225,7 @@ def fetch(bbox, key, at=None, transport=request_page, progress=None):
         return download_rows('GEODKV', {'geometri': {'intersects': {'wkt': wkt, 'crs': 25832}},
                                         'status': {'eq': 'Anlagt'}, 'geometristatus': {'eq': 'Endelig'}},
                              at, key, transport)
-    tiles = envelopes(bbox)
+    tiles = areas or envelopes(bbox)
     with ThreadPoolExecutor(WORKERS) as pool:
         outlines = unique([row for rows in counted(pool.map(tile_rows, tiles), 'buildings', len(tiles), progress)
                            for row in rows], 'GEODKV')

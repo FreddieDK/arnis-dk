@@ -220,20 +220,45 @@ def _pieces(geometry):
     return list(geometry.geoms) if hasattr(geometry, 'geoms') else [geometry]
 
 
-def select(hedge_rows, scrub_rows, building_rows, at, heights=None, progress=None):
-    """Hedge lines and scrub polygons to grow, in EPSG:25832, with counts. `progress` hears
-    the height-model tiles (heights) and each hedge line (selecting)."""
+def _footprints(building_rows, at):
+    """The union of the active GeoDanmark buildings, prepared for point tests, or None."""
     outlines = [force_2d(from_wkt(r['geometri'] if isinstance(r['geometri'], str) else r['geometri']['wkt']))
                 for r in building_rows
                 if active(r, 'Anlagt', at) and r.get('geometristatus') == 'Endelig'
                 and r.get('metode3D') != 'Under terræn']
-    footprints = unary_union(outlines) if outlines else None
+    if not outlines:
+        return None
+    footprints = unary_union(outlines)
+    shapely.prepare(footprints)
+    return footprints
+
+
+def measure(hedge_rows, building_rows, at, heights, progress=None):
+    """Growth share along each untyped hedge line, by GeoDanmark id, as select() measures
+    it; None where too little was measurable. Kept with the rows, the shares let select()
+    run again later without the height model. `progress` hears the height-model tiles
+    (heights) and each line (selecting)."""
+    untyped = sorted((r for r in hedge_rows if r.get('hegnstype') == UNTYPED), key=lambda r: r['id_lokalId'])
+    if heights is None or not untyped:
+        return {}
+    footprints = _footprints(building_rows, at)
+    lines = [force_2d(from_wkt(r['geometri']['wkt'])) for r in untyped]
+    if hasattr(heights, 'prefetch'):
+        heights.prefetch((line.buffer(BAND_HALF_WIDTH_M) for line in lines), progress)
+    return {row['id_lokalId']: growth_share(line, heights, footprints)
+            for row, line in counted(zip(untyped, lines), 'selecting', len(untyped), progress)}
+
+
+def select(hedge_rows, scrub_rows, building_rows, at, heights=None, progress=None, shares=None):
+    """Hedge lines and scrub polygons to grow, in EPSG:25832, with counts. Untyped lines are
+    measured in `heights`, or looked up in `shares` from measure(). `progress` hears the
+    height-model tiles (heights) and each hedge line (selecting)."""
+    footprints = _footprints(building_rows, at)
     keep_out = footprints.buffer(BUILDING_CLEARANCE_M) if footprints is not None else None
     if footprints is not None:
         # A town has thousands of each. The point test gets a prepared index, and a
         # line or area is cut only by the clearance pieces it touches: same result,
         # without testing every hedge against every building in the area.
-        shapely.prepare(footprints)
         clearance = _pieces(keep_out)
         nearby = STRtree(clearance)
 
@@ -242,7 +267,7 @@ def select(hedge_rows, scrub_rows, building_rows, at, heights=None, progress=Non
             return geometry.difference(unary_union([clearance[i] for i in hits])) if len(hits) else geometry
     counts = {'hedge_lines': 0, 'fence_lines': 0, 'untyped_kept': 0, 'untyped_dropped': 0,
               'untyped_unmeasured': 0}
-    if heights is not None and hasattr(heights, 'prefetch'):
+    if shares is None and heights is not None and hasattr(heights, 'prefetch'):
         heights.prefetch((force_2d(from_wkt(row['geometri']['wkt'])).buffer(BAND_HALF_WIDTH_M)
                           for row in hedge_rows if row.get('hegnstype') == UNTYPED), progress)
     hedges = []
@@ -252,7 +277,10 @@ def select(hedge_rows, scrub_rows, building_rows, at, heights=None, progress=Non
         if kind == HEDGE:
             counts['hedge_lines'] += 1
         elif kind == UNTYPED:
-            share = growth_share(line, heights, footprints) if heights is not None else None
+            if shares is not None:
+                share = shares.get(row['id_lokalId'])
+            else:
+                share = growth_share(line, heights, footprints) if heights is not None else None
             if share is None:
                 counts['untyped_unmeasured'] += 1
                 continue
