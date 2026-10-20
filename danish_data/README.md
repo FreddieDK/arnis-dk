@@ -42,8 +42,11 @@ Dataforsyningen token to the same file as `DATAFORSYNINGEN_TOKEN=your-token`
 the Git-ignored `.local/` directory.
 
 Bounding boxes use WGS84 coordinates in **south, west, north, east** order.
-Each download is limited to 10 km². For larger areas, use the
-[Meld integration](MELD.md), which downloads data for individual cells.
+A download covers at most 100 km². Datafordeler is asked for at most 10 km² at a
+time: a larger area is split into tiles of 3 × 3 km, all at the same snapshot
+time, and a building or hedge on a tile border is kept once. An 8 × 8 km area
+takes nine tiles. For larger areas, use the [Meld integration](MELD.md), which
+downloads data for individual cells.
 
 ```sh
 python danish_data/fetch.py --credentials-file .local/datafordeler.env --bbox "55.670,12.560,55.675,12.570" --output .local/data/buildings.json

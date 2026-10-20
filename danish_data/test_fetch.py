@@ -7,8 +7,11 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
-from fetch import (ALIASES, ENTITIES, atomic_json, bounds, download_rows, fetch,
-                   linked_rows, load_key, request_page)
+from shapely import from_wkt
+from shapely.ops import unary_union
+
+from fetch import (ALIASES, AREA_KM2, ENTITIES, REQUEST_KM2, atomic_json, bounds, download_rows,
+                   fetch, linked_rows, load_key, request_page)
 
 
 NOW = datetime(2026, 10, 9, tzinfo=timezone.utc)
@@ -155,6 +158,44 @@ class FetchTests(unittest.TestCase):
         for response in responses:
             with self.subTest(response=response), self.assertRaises(ValueError):
                 download_rows('BBR', {}, NOW, 'key', lambda *_: response)
+
+    def test_a_large_area_is_asked_for_in_tiles_and_each_building_kept_once(self):
+        # About 8 x 8 km: nine tiles of under 3 x 3 km.
+        bbox = [55.400, 11.300, 55.472, 11.427]
+        shared = {'id_lokalId': 'geo-1', 'BBRUUID': 'bbr-1', 'status': 'Anlagt',
+                  'geometristatus': 'Endelig', 'geometri': {'crs': 25832, 'wkt': 'POLYGON EMPTY'}}
+        tiles, linked = [], []
+        def transport(register, query, variables, key):
+            if register == 'GEODKV':
+                tiles.append(from_wkt(variables['where']['geometri']['intersects']['wkt']))
+                # Every tile returns the building on its border.
+                return page(register, [dict(shared)])
+            linked.append(variables['where'])
+            return page(register, [{'id_lokalId': 'bbr-1', 'status': '6'}] if register == 'BBR' else [])
+        geo, bbr, _, _ = fetch(bbox, 'key', NOW, transport)
+        self.assertEqual(len(tiles), 9)
+        self.assertTrue(all(tile.area < REQUEST_KM2 * 1e6 for tile in tiles))
+        self.assertGreater(unary_union(tiles).area, 60e6)
+        self.assertEqual([row['id_lokalId'] for row in geo], ['geo-1'])
+        self.assertEqual(len(bbr), 1)
+        self.assertEqual(linked[0], {'id_lokalId': {'in': ['bbr-1']}})
+
+    def test_tiles_that_return_different_versions_of_one_record_stop(self):
+        bbox = [55.400, 11.300, 55.472, 11.427]
+        versions = iter(range(100))
+        def transport(register, *_):
+            return page(register, [{'id_lokalId': 'geo-1', 'status': 'Anlagt', 'geometristatus': 'Endelig',
+                                    'BBRUUID': f'bbr-{next(versions)}',
+                                    'geometri': {'crs': 25832, 'wkt': 'POLYGON EMPTY'}}])
+        with self.assertRaisesRegex(ValueError, 'different versions'):
+            fetch(bbox, 'key', NOW, transport)
+
+    def test_a_request_stays_under_ten_and_a_download_under_a_hundred_square_kilometres(self):
+        self.assertEqual(len(bounds('55.400,11.300,55.472,11.427', AREA_KM2)), 4)
+        with self.assertRaisesRegex(ValueError, '10 square'):
+            bounds('55.400,11.300,55.472,11.427')
+        with self.assertRaisesRegex(ValueError, '100 square'):
+            fetch([55.0, 11.0, 55.2, 11.3], 'key', NOW, lambda *_: self.fail('No request'))
 
     def test_invalid_bbox_and_naive_time_fail_before_network(self):
         for value in ['55,11,55,12', 'nan,11,56,12', '55,11,56,12', '0,0,0.001,0.001']:

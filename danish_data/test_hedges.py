@@ -137,6 +137,21 @@ class HedgeTests(unittest.TestCase):
         self.assertIn('Højdemodel', supplement['arnis_dk']['attribution'])
         self.assertNotIn('secret-token', json.dumps(supplement))
 
+    def test_a_large_area_asks_for_hedges_in_tiles_and_keeps_each_line_once(self):
+        tiles = []
+
+        def transport(register, query, variables, key):
+            entity = 'GEODKV_Hegn' if 'GEODKV_Hegn(' in query else 'GEODKV_KratBevoksning'
+            tiles.append((entity, variables['where']['geometri']['intersects']['wkt']))
+            return {'data': {entity: {'nodes': [ROWS[0]] if entity == 'GEODKV_Hegn' else SCRUB,
+                                      'pageInfo': {'hasNextPage': False}}}}
+
+        supplement = {'arnis_dk': {'attribution': 'GeoDanmark'}, 'elements': []}
+        counts = hedges.add(supplement, [55.400, 11.300, 55.472, 11.427], [], 'key', AT, transport=transport)
+        self.assertEqual(sum(entity == 'GEODKV_Hegn' for entity, _ in tiles), 9)
+        self.assertEqual(len({wkt for _, wkt in tiles}), 9)
+        self.assertEqual((counts['hedge_pieces'], counts['scrub_areas']), (1, 1))
+
     def test_a_dropped_tile_is_tried_again_and_a_lasting_failure_names_its_cause(self):
         from urllib.error import HTTPError
         calls = []

@@ -41,16 +41,57 @@ def load_key(path=None):
     return key
 
 
-def bounds(value):
+# One geometry query covers at most REQUEST_KM2; a larger area is asked for in tiles
+# of TILE_KM by TILE_KM. Only the geometry queries depend on the area: the linked
+# registers are asked for by identity, 100 at a time.
+REQUEST_KM2 = 10
+TILE_KM = 3
+AREA_KM2 = 100
+
+
+def bounds(value, limit=REQUEST_KM2):
     numbers = [float(n) for n in value.split(',')]
     if len(numbers) != 4 or not all(math.isfinite(n) for n in numbers):
         raise ValueError('Expected four finite bbox coordinates')
     south, west, north, east = numbers
     if not (54 <= south < north <= 58 and 7 <= west < east <= 16):
         raise ValueError('The download bbox must be in Denmark (WGS84 lat,lon)')
-    if (north - south) * 111.32 * (east - west) * 111.32 * math.cos(math.radians((south+north)/2)) > 10:
-        raise ValueError('Download at most 10 square kilometres per request')
+    if (north - south) * 111.32 * (east - west) * 111.32 * math.cos(math.radians((south+north)/2)) > limit:
+        raise ValueError(f'Download at most {limit} square kilometres per request')
     return numbers
+
+
+def envelopes(bbox):
+    """WKT rectangles in EPSG:25832 that together cover `bbox`, each under REQUEST_KM2."""
+    south, west, north, east = bbox
+    rows = max(1, math.ceil((north - south) * 111.32 / TILE_KM))
+    cols = max(1, math.ceil((east - west) * 111.32 * math.cos(math.radians(south)) / TILE_KM))
+    to_utm = Transformer.from_crs(4326, 25832, always_xy=True)
+    result = []
+    for row in range(rows):
+        s, n = south + (north - south) * row / rows, south + (north - south) * (row + 1) / rows
+        for col in range(cols):
+            w, e = west + (east - west) * col / cols, west + (east - west) * (col + 1) / cols
+            # Datafordeler requires the field's native CRS. A densified envelope avoids
+            # dropping edge buildings when the WGS84 rectangle is rotated by projection.
+            left, bottom, right, top = to_utm.transform_bounds(w, s, e, n, densify_pts=21)
+            result.append(f'POLYGON (({left} {bottom},{right} {bottom},{right} {top},{left} {top},{left} {bottom}))')
+    return result
+
+
+def unique(rows, register):
+    """Each record once. Neighbouring tiles both return the features on their border."""
+    seen, result = {}, []
+    for row in rows:
+        row_id = identity(row.get('id_lokalId'))
+        if row_id and row_id in seen:
+            if seen[row_id] != row:
+                raise ValueError(f'{register}: tiles returned different versions of one record')
+            continue
+        if row_id:
+            seen[row_id] = row
+        result.append(row)
+    return result
 
 
 ATTEMPTS = 5
@@ -142,18 +183,14 @@ def linked_rows(register, ids, at, key, transport, field='id_lokalId'):
 
 
 def fetch(bbox, key, at=None, transport=request_page):
-    bbox = bounds(','.join(map(str, bbox)))
+    bbox = bounds(','.join(map(str, bbox)), AREA_KM2)
     at = at or datetime.now(timezone.utc)
     if at.tzinfo is None:
         raise ValueError('Snapshot time must have a timezone')
-    south, west, north, east = bbox
-    # Datafordeler requires the field's native CRS. A densified envelope avoids
-    # dropping edge buildings when the WGS84 rectangle is rotated by projection.
-    left, bottom, right, top = Transformer.from_crs(4326, 25832, always_xy=True).transform_bounds(
-        west, south, east, north, densify_pts=21)
-    wkt = f'POLYGON (({left} {bottom},{right} {bottom},{right} {top},{left} {top},{left} {bottom}))'
-    outlines = download_rows('GEODKV', {'geometri': {'intersects': {'wkt': wkt, 'crs': 25832}},
-                                      'status': {'eq': 'Anlagt'}, 'geometristatus': {'eq': 'Endelig'}}, at, key, transport)
+    outlines = unique([row for wkt in envelopes(bbox) for row in download_rows(
+        'GEODKV', {'geometri': {'intersects': {'wkt': wkt, 'crs': 25832}},
+                   'status': {'eq': 'Anlagt'}, 'geometristatus': {'eq': 'Endelig'}}, at, key, transport)],
+        'GEODKV')
     converted = []
     for row in outlines:
         if not active(row, 'Anlagt', at) or row.get('geometristatus') != 'Endelig' or row.get('metode3D') == 'Under terræn':
@@ -209,14 +246,14 @@ def atomic_json(path, document):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--bbox', required=True, help='min_lat,min_lon,max_lat,max_lon; max 10 km2')
+    parser.add_argument('--bbox', required=True, help='min_lat,min_lon,max_lat,max_lon; max 100 km2, asked for in tiles of 3 x 3 km')
     parser.add_argument('--credentials-file', type=Path, help='Local .env file; otherwise read DATAFORDELER_API_KEY')
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--hedges', action=argparse.BooleanOptionalAction, default=True,
                         help='Add GeoDanmark hedges and scrub; untyped hedges need DATAFORSYNINGEN_TOKEN')
     args = parser.parse_args()
     try:
-        bbox = bounds(args.bbox)
+        bbox = bounds(args.bbox, AREA_KM2)
         key = load_key(args.credentials_file)
         outlines, bbr, dar, at = fetch(bbox, key)
         # Each successful run is an immutable local snapshot, usable by prepare.py offline.

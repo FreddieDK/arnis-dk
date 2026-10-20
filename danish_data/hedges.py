@@ -25,7 +25,7 @@ from shapely import force_2d, from_wkt
 from shapely.geometry import LineString, Polygon
 from shapely.ops import transform, unary_union
 
-from fetch import request_page
+from fetch import envelopes, request_page, unique
 from prepare import active
 
 HEDGE = 'Levende'
@@ -278,13 +278,12 @@ def append_elements(supplement, hedges, scrub):
 
 def add(supplement, bbox, building_rows, key, at, token=None, transport=request_page, opener=None):
     """Adds GeoDanmark's real hedges and scrub inside `bbox` to a prepared supplement."""
-    south, west, north, east = bbox
-    left, bottom, right, top = Transformer.from_crs(4326, 25832, always_xy=True).transform_bounds(
-        west, south, east, north, densify_pts=21)
-    wkt = f'POLYGON (({left} {bottom},{right} {bottom},{right} {top},{left} {top},{left} {bottom}))'
     fields = 'id_lokalId status geometristatus geometri { wkt crs }'
-    hedge_rows = download('GEODKV_Hegn', fields + ' hegnstype', wkt, at, key, transport)
-    scrub_rows = download('GEODKV_KratBevoksning', fields, wkt, at, key, transport)
+    tiles = envelopes(bbox)
+    hedge_rows = unique([row for wkt in tiles for row in download(
+        'GEODKV_Hegn', fields + ' hegnstype', wkt, at, key, transport)], 'GEODKV_Hegn')
+    scrub_rows = unique([row for wkt in tiles for row in download(
+        'GEODKV_KratBevoksning', fields, wkt, at, key, transport)], 'GEODKV_KratBevoksning')
     heights = HeightModel(token, opener) if token else None
     hedges, scrub, counts = select(hedge_rows, scrub_rows, building_rows, at, heights)
     append_elements(supplement, hedges, scrub)
