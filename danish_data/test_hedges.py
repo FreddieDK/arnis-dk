@@ -166,6 +166,24 @@ class HedgeTests(unittest.TestCase):
         self.assertEqual(len({wkt for _, wkt in tiles}), 9)
         self.assertEqual((counts['hedge_pieces'], counts['scrub_areas']), (1, 1))
 
+    def test_height_tiles_are_fetched_together_once_each_before_the_lines_are_measured(self):
+        calls = []
+
+        def opener(params):
+            calls.append((params['coverage'], params['bbox']))
+            # Growth of 1.5 m in the tiles west of x=40 and 0.1 m in those east of it.
+            left = float(params['bbox'].split(',')[0])
+            surface = 31.5 if left < 40 else 30.1
+            return tiff(np.full((50, 50), surface if params['coverage'] == 'dhm_overflade' else 30.0))
+
+        with patch.object(hedges, 'TILE_PX', 50):  # tiles of 40 m
+            model = hedges.HeightModel('t', opener, sleep=lambda s: None)
+            lines, _, counts = hedges.select(ROWS, [], [BUILDING], AT, model)
+        self.assertEqual(len(calls), len(set(calls)), 'no tile is downloaded twice')
+        self.assertEqual(len(calls), 2 * len(model.tiles))
+        self.assertEqual({key.split('/')[0] for key, _ in lines}, {'living', 'grown'})
+        self.assertEqual((counts['untyped_kept'], counts['untyped_dropped']), (1, 1))
+
     def test_a_dropped_tile_is_tried_again_and_a_lasting_failure_names_its_cause(self):
         from urllib.error import HTTPError
         calls = []

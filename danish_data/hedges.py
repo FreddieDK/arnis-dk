@@ -7,6 +7,7 @@ fills a 1.2 m band with growth above 0.7 m; a plank or wire fence barely shows. 
 height model only typed hedges are kept. Hedges and scrub are cut back 1 m from buildings,
 so Arnis grows them in gardens and never inside a building.
 """
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 from http.client import HTTPException
 import math
@@ -43,6 +44,9 @@ TILE_PX = 1000
 WCS = 'https://api.dataforsyningen.dk/dhm_wcs_DAF'
 # Seconds between tries of one tile; the service drops the odd request under load.
 RETRY_DELAYS = (2, 4, 8)
+# Tiles downloaded at the same time. One tile is a few seconds of waiting on the WCS;
+# a 4 x 4 km town needs about 25 of them.
+TILE_WORKERS = 4
 TAG = 'geodanmark'
 
 
@@ -146,21 +150,37 @@ class HeightModel:
                     raise ValueError('Height model: service unavailable') from None
             self.sleep(RETRY_DELAYS[attempt])
 
+    def _growth(self, tx, ty):
+        left, bottom = tx * self.size, ty * self.size
+        layers = []
+        for coverage in ('dhm_overflade', 'dhm_terraen'):
+            params = {'service': 'WCS', 'version': '1.0.0', 'request': 'GetCoverage',
+                      'coverage': coverage, 'crs': 'EPSG:25832', 'format': 'GTiff',
+                      'bbox': f'{left},{bottom},{left + self.size},{bottom + self.size}',
+                      'width': TILE_PX, 'height': TILE_PX}
+            layers.append(self._download(params))
+        growth = layers[0] - layers[1]
+        # Unset cells are large negative values in either model.
+        growth[(layers[0] < -100) | (layers[1] < -100)] = np.nan
+        return growth
+
     def _tile(self, tx, ty):
         if (tx, ty) not in self.tiles:
-            left, bottom = tx * self.size, ty * self.size
-            layers = []
-            for coverage in ('dhm_overflade', 'dhm_terraen'):
-                params = {'service': 'WCS', 'version': '1.0.0', 'request': 'GetCoverage',
-                          'coverage': coverage, 'crs': 'EPSG:25832', 'format': 'GTiff',
-                          'bbox': f'{left},{bottom},{left + self.size},{bottom + self.size}',
-                          'width': TILE_PX, 'height': TILE_PX}
-                layers.append(self._download(params))
-            growth = layers[0] - layers[1]
-            # Unset cells are large negative values in either model.
-            growth[(layers[0] < -100) | (layers[1] < -100)] = np.nan
-            self.tiles[(tx, ty)] = growth
+            self.tiles[(tx, ty)] = self._growth(tx, ty)
         return self.tiles[(tx, ty)]
+
+    def prefetch(self, geometries):
+        """Downloads every tile under `geometries`, TILE_WORKERS at a time, rather than
+        one by one as sample() reaches them."""
+        keys = set()
+        for geometry in geometries:
+            x0, y0, x1, y1 = geometry.bounds
+            keys.update((tx, ty) for tx in range(math.floor(x0 / self.size), math.floor(x1 / self.size) + 1)
+                        for ty in range(math.floor(y0 / self.size), math.floor(y1 / self.size) + 1))
+        missing = sorted(keys - self.tiles.keys())
+        with ThreadPoolExecutor(TILE_WORKERS) as pool:
+            for key, growth in zip(missing, pool.map(lambda key: self._growth(*key), missing)):
+                self.tiles[key] = growth
 
     def sample(self, xs, ys):
         out = np.full(len(xs), np.nan, dtype=np.float32)
@@ -220,6 +240,9 @@ def select(hedge_rows, scrub_rows, building_rows, at, heights=None):
             return geometry.difference(unary_union([clearance[i] for i in hits])) if len(hits) else geometry
     counts = {'hedge_lines': 0, 'fence_lines': 0, 'untyped_kept': 0, 'untyped_dropped': 0,
               'untyped_unmeasured': 0}
+    if heights is not None and hasattr(heights, 'prefetch'):
+        heights.prefetch(force_2d(from_wkt(row['geometri']['wkt'])).buffer(BAND_HALF_WIDTH_M)
+                         for row in hedge_rows if row.get('hegnstype') == UNTYPED)
     hedges = []
     for row in sorted(hedge_rows, key=lambda r: r['id_lokalId']):
         kind = row.get('hegnstype')
