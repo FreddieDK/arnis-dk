@@ -164,6 +164,20 @@ class StoreTests(unittest.TestCase):
         fetched, _ = store.build(self.dir / 'store', keys, 'key', older_than=timedelta(days=30), transport=counting)
         self.assertEqual(fetched, [keys[0]])
 
+    def test_refresh_fetches_old_stored_tiles_again_and_never_new_ones(self):
+        keys = store.tile_keys(bbox_around(650900, 6150900, 651100, 6151100))
+        stored, absent = sorted(keys)
+        store.build(self.dir / 'store', [stored], 'key', transport=transport)
+        self.assertEqual(store.stored_keys(self.dir / 'store'), [stored])
+        self.assertEqual(store.refresh(self.dir / 'store', 'key', transport=transport), ([], []))
+        old = time.time() - 40 * 86400
+        os.utime(store.tile_path(self.dir / 'store', stored), (old, old))
+        fetched, failed = store.refresh(self.dir / 'store', 'key', older_than=timedelta(days=25),
+                                        transport=transport)
+        self.assertEqual((fetched, failed), ([stored], []))
+        self.assertFalse(store.tile_path(self.dir / 'store', absent).exists())
+        self.assertGreater(store.tile_path(self.dir / 'store', stored).stat().st_mtime, old + 86400)
+
     def test_a_failing_tile_is_reported_and_the_others_are_kept(self):
         keys = store.tile_keys(bbox_around(650900, 6150900, 651100, 6151100))
         bad = sorted(keys)[0]

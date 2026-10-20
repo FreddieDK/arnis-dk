@@ -12,6 +12,8 @@ the tiles under it, offline: seconds instead of minutes.
 `build` fetches the tiles the store lacks; stop it and run it again to continue, and add
 `--older-than DAYS` to fetch old tiles again. `supplement --fetch-missing` fetches and
 keeps the tiles a bbox lacks, so a store can also fill itself as maps are made.
+`refresh --store DIR --older-than DAYS` fetches again the tiles the store holds that are
+older, and no others, so a store that fills itself keeps its size.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -122,6 +124,19 @@ def build(store, keys, api_key, token=None, workers=2, older_than=None, progress
     return todo, failed
 
 
+def stored_keys(store):
+    """Every tile the store holds."""
+    return sorted(path.name[:-len('.json.gz')] for path in (Path(store) / 'tiles').glob('*/*.json.gz'))
+
+
+def refresh(store, api_key, token=None, older_than=timedelta(days=30), workers=2, progress=None,
+            transport=request_page, opener=None, log=print):
+    """Fetches again the tiles the store holds that are older than `older_than`. A tile is
+    replaced only once its new version is complete, so maps can use the store meanwhile."""
+    return build(store, stored_keys(store), api_key, token, workers, older_than, progress,
+                 transport, opener, log)
+
+
 def supplement(store, bbox, output, fetch_missing=None, workers=4, progress=None,
                transport=request_page, opener=None, log=print):
     """The supplement fetch.py makes for `bbox`, assembled from the store and written to
@@ -193,12 +208,15 @@ def main():
     build_args.add_argument('--bbox', required=True, action='append', help='S,W,N,E; may be repeated')
     build_args.add_argument('--workers', type=int, default=2)
     build_args.add_argument('--older-than', type=float, metavar='DAYS', help='Also fetch tiles older than this')
+    refresh_args = commands.add_parser('refresh', help='Fetch again the stored tiles older than DAYS')
+    refresh_args.add_argument('--older-than', type=float, metavar='DAYS', required=True)
+    refresh_args.add_argument('--workers', type=int, default=2)
     assemble_args = commands.add_parser('supplement', help='Assemble a supplement for a bbox from the store')
     assemble_args.add_argument('--bbox', required=True, help=f'S,W,N,E; max {AREA_KM2} km2')
     assemble_args.add_argument('--output', required=True, type=Path)
     assemble_args.add_argument('--fetch-missing', action='store_true', help='Fetch and keep tiles the store lacks')
     assemble_args.add_argument('--workers', type=int, default=4)
-    for command in (build_args, assemble_args):
+    for command in (build_args, refresh_args, assemble_args):
         command.add_argument('--store', required=True, type=Path)
         command.add_argument('--credentials-file', type=Path,
                              help='Local .env file; otherwise DATAFORDELER_API_KEY and DATAFORSYNINGEN_TOKEN')
@@ -218,6 +236,13 @@ def main():
             print(f'{len(keys)} tiles in the store area; fetched {len(todo) - len(failed)}, {len(failed)} failed.')
             if failed:
                 parser.exit(1, 'Run build again to retry the failed tiles.\n')
+        elif args.command == 'refresh':
+            held = len(stored_keys(args.store))
+            todo, failed = refresh(args.store, *credentials(), timedelta(days=args.older_than), args.workers,
+                                   build_reporter())
+            print(f'{held} tiles in the store; fetched {len(todo) - len(failed)} again, {len(failed)} failed.')
+            if failed:
+                parser.exit(1, 'The failed tiles keep their older version; refresh again to retry them.\n')
         else:
             result = supplement(args.store, bounds(args.bbox, AREA_KM2), args.output,
                                 credentials if args.fetch_missing else None, args.workers, progress_printer())

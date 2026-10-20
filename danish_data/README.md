@@ -91,6 +91,10 @@ python danish_data/store.py supplement --store /srv/arnis-dk-store --bbox "55.67
   reported and fetched on the next run. `--older-than DAYS` fetches older tiles
   again. The two bboxes above cover Denmark and Bornholm in about 12,900 tiles,
   most of them sea.
+- `refresh --store DIR --older-than DAYS` fetches again the tiles the store holds
+  that are older, and no others, so a store that fills itself keeps its size. A
+  tile is replaced only once its new version is complete; a failed one keeps its
+  older version. Run monthly with `--older-than 25`, for example from a timer.
 - A town tile is about 0.5 MB, a rural tile far less; Denmark is estimated at
   1.5–2 GB. Keys come from `--credentials-file` or the environment, as for `fetch.py`.
 - A hedge crossing a tile border is measured in each tile with that tile's
