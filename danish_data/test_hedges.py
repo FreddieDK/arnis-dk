@@ -105,6 +105,20 @@ class HedgeTests(unittest.TestCase):
         self.assertEqual({key.split('/')[0] for key, _ in lines}, {'living'})
         self.assertEqual(counts['untyped_unmeasured'], 2)
 
+    def test_a_hedge_is_cut_back_from_every_building_it_passes_and_left_whole_elsewhere(self):
+        houses = [dict(BUILDING, geometri=f'POLYGON (({x} 30, {x + 6} 30, {x + 6} 36, {x} 36, {x} 30))')
+                  for x in (0, 20, 200)]
+        row = hedge('row', 'Levende', 'LINESTRING (-10 33, 40 33)')
+        lone = hedge('lone', 'Levende', 'LINESTRING (100 0, 120 0)')
+        lines, _, _ = hedges.select([row, lone], [], houses, AT, None)
+        pieces = {key: line for key, line in lines}
+        self.assertEqual(sorted(pieces), ['lone/0', 'row/0', 'row/1', 'row/2'])
+        for key, line in pieces.items():
+            for house in houses:
+                self.assertGreaterEqual(line.distance(from_wkt(house['geometri'])),
+                                        hedges.BUILDING_CLEARANCE_M - 0.01, key)
+        self.assertEqual(pieces['lone/0'].length, 20)
+
     def test_growth_under_a_building_does_not_make_a_hedge(self):
         roofline = hedge('roof', 'Ikke tildelt', 'LINESTRING (6 0, 14 0)')
         lines, _, counts = hedges.select([roofline], [], [BUILDING], AT, Heights())

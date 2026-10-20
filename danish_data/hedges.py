@@ -23,6 +23,7 @@ from pyproj import Transformer
 import shapely
 from shapely import force_2d, from_wkt
 from shapely.geometry import LineString, Polygon
+from shapely.strtree import STRtree
 from shapely.ops import transform, unary_union
 
 from fetch import envelopes, request_page, unique
@@ -206,6 +207,17 @@ def select(hedge_rows, scrub_rows, building_rows, at, heights=None):
                 and r.get('metode3D') != 'Under terræn']
     footprints = unary_union(outlines) if outlines else None
     keep_out = footprints.buffer(BUILDING_CLEARANCE_M) if footprints is not None else None
+    if footprints is not None:
+        # A town has thousands of each. The point test gets a prepared index, and a
+        # line or area is cut only by the clearance pieces it touches: same result,
+        # without testing every hedge against every building in the area.
+        shapely.prepare(footprints)
+        clearance = _pieces(keep_out)
+        nearby = STRtree(clearance)
+
+        def cut(geometry):
+            hits = nearby.query(geometry, predicate='intersects')
+            return geometry.difference(unary_union([clearance[i] for i in hits])) if len(hits) else geometry
     counts = {'hedge_lines': 0, 'fence_lines': 0, 'untyped_kept': 0, 'untyped_dropped': 0,
               'untyped_unmeasured': 0}
     hedges = []
@@ -227,7 +239,7 @@ def select(hedge_rows, scrub_rows, building_rows, at, heights=None):
             counts['fence_lines'] += 1
             continue
         if keep_out is not None:
-            line = line.difference(keep_out)
+            line = cut(line)
         for i, piece in enumerate(_pieces(line)):
             if piece.geom_type == 'LineString' and piece.length >= MIN_PIECE_M:
                 hedges.append((f"{row['id_lokalId']}/{i}", piece))
@@ -235,7 +247,7 @@ def select(hedge_rows, scrub_rows, building_rows, at, heights=None):
     for row in sorted(scrub_rows, key=lambda r: r['id_lokalId']):
         area = force_2d(from_wkt(row['geometri']['wkt']))
         if keep_out is not None:
-            area = area.difference(keep_out)
+            area = cut(area)
         for i, piece in enumerate(_pieces(area)):
             if piece.geom_type == 'Polygon' and piece.area >= 4:
                 scrub.append((f"{row['id_lokalId']}/{i}", piece))
