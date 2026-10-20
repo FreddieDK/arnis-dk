@@ -47,6 +47,11 @@ jobs:
           timeout 300 ./arnis --bbox '55.6700,12.5600,55.6702,12.5603' --file empty-osm.json --output-dir smoke-world --mode geo-only --overture=false --canopy-height=false --no-3d --signage full --map-item=false
           test -s 'smoke-world/Arnis World 1/level.dat'
           find 'smoke-world/Arnis World 1/region' -name '*.mca' | grep -q .
+          # The data tools import each other; a module left out only fails at run time.
+          python -m venv venv
+          venv/bin/pip install -q -r danish_data/requirements.txt
+          (cd danish_data && ../venv/bin/python -c 'import fetch, prepare, hedges, meld_bridge, ocean_mask, bridge_mask, national_mask, seal_void_edges, utm32')
+          venv/bin/python danish_data/fetch.py --help > /dev/null
       - uses: actions/upload-artifact@v7
         with:
           name: arnis-dk-linux-x86_64
