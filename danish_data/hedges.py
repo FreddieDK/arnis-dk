@@ -27,7 +27,7 @@ from shapely.geometry import LineString, Polygon
 from shapely.strtree import STRtree
 from shapely.ops import transform, unary_union
 
-from fetch import envelopes, request_page, unique
+from fetch import counted, envelopes, request_page, unique
 from prepare import active
 
 HEDGE = 'Levende'
@@ -169,9 +169,9 @@ class HeightModel:
             self.tiles[(tx, ty)] = self._growth(tx, ty)
         return self.tiles[(tx, ty)]
 
-    def prefetch(self, geometries):
+    def prefetch(self, geometries, progress=None):
         """Downloads every tile under `geometries`, TILE_WORKERS at a time, rather than
-        one by one as sample() reaches them."""
+        one by one as sample() reaches them. `progress` hears each tile as phase heights."""
         keys = set()
         for geometry in geometries:
             x0, y0, x1, y1 = geometry.bounds
@@ -179,7 +179,8 @@ class HeightModel:
                         for ty in range(math.floor(y0 / self.size), math.floor(y1 / self.size) + 1))
         missing = sorted(keys - self.tiles.keys())
         with ThreadPoolExecutor(TILE_WORKERS) as pool:
-            for key, growth in zip(missing, pool.map(lambda key: self._growth(*key), missing)):
+            tiles = counted(pool.map(lambda key: self._growth(*key), missing), 'heights', len(missing), progress)
+            for key, growth in zip(missing, tiles):
                 self.tiles[key] = growth
 
     def sample(self, xs, ys):
@@ -219,8 +220,9 @@ def _pieces(geometry):
     return list(geometry.geoms) if hasattr(geometry, 'geoms') else [geometry]
 
 
-def select(hedge_rows, scrub_rows, building_rows, at, heights=None):
-    """Hedge lines and scrub polygons to grow, in EPSG:25832, with counts."""
+def select(hedge_rows, scrub_rows, building_rows, at, heights=None, progress=None):
+    """Hedge lines and scrub polygons to grow, in EPSG:25832, with counts. `progress` hears
+    the height-model tiles (heights) and each hedge line (selecting)."""
     outlines = [force_2d(from_wkt(r['geometri'] if isinstance(r['geometri'], str) else r['geometri']['wkt']))
                 for r in building_rows
                 if active(r, 'Anlagt', at) and r.get('geometristatus') == 'Endelig'
@@ -241,10 +243,10 @@ def select(hedge_rows, scrub_rows, building_rows, at, heights=None):
     counts = {'hedge_lines': 0, 'fence_lines': 0, 'untyped_kept': 0, 'untyped_dropped': 0,
               'untyped_unmeasured': 0}
     if heights is not None and hasattr(heights, 'prefetch'):
-        heights.prefetch(force_2d(from_wkt(row['geometri']['wkt'])).buffer(BAND_HALF_WIDTH_M)
-                         for row in hedge_rows if row.get('hegnstype') == UNTYPED)
+        heights.prefetch((force_2d(from_wkt(row['geometri']['wkt'])).buffer(BAND_HALF_WIDTH_M)
+                          for row in hedge_rows if row.get('hegnstype') == UNTYPED), progress)
     hedges = []
-    for row in sorted(hedge_rows, key=lambda r: r['id_lokalId']):
+    for row in counted(sorted(hedge_rows, key=lambda r: r['id_lokalId']), 'selecting', len(hedge_rows), progress):
         kind = row.get('hegnstype')
         line = force_2d(from_wkt(row['geometri']['wkt']))
         if kind == HEDGE:
@@ -311,16 +313,20 @@ def append_elements(supplement, hedges, scrub):
         way(key, area.exterior.coords, {'natural': 'scrub', 'arnis:hedge': TAG}, True)
 
 
-def add(supplement, bbox, building_rows, key, at, token=None, transport=request_page, opener=None):
-    """Adds GeoDanmark's real hedges and scrub inside `bbox` to a prepared supplement."""
+def add(supplement, bbox, building_rows, key, at, token=None, transport=request_page, opener=None,
+        progress=None):
+    """Adds GeoDanmark's real hedges and scrub inside `bbox` to a prepared supplement.
+    `progress` hears each query (phase hedges), then the phases of select()."""
     fields = 'id_lokalId status geometristatus geometri { wkt crs }'
     tiles = envelopes(bbox)
-    hedge_rows = unique([row for wkt in tiles for row in download(
-        'GEODKV_Hegn', fields + ' hegnstype', wkt, at, key, transport)], 'GEODKV_Hegn')
-    scrub_rows = unique([row for wkt in tiles for row in download(
-        'GEODKV_KratBevoksning', fields, wkt, at, key, transport)], 'GEODKV_KratBevoksning')
+    queries = [('GEODKV_Hegn', fields + ' hegnstype', wkt) for wkt in tiles] +               [('GEODKV_KratBevoksning', fields, wkt) for wkt in tiles]
+    rows = {'GEODKV_Hegn': [], 'GEODKV_KratBevoksning': []}
+    for entity, entity_fields, wkt in counted(queries, 'hedges', len(queries), progress):
+        rows[entity] += download(entity, entity_fields, wkt, at, key, transport)
+    hedge_rows = unique(rows['GEODKV_Hegn'], 'GEODKV_Hegn')
+    scrub_rows = unique(rows['GEODKV_KratBevoksning'], 'GEODKV_KratBevoksning')
     heights = HeightModel(token, opener) if token else None
-    hedges, scrub, counts = select(hedge_rows, scrub_rows, building_rows, at, heights)
+    hedges, scrub, counts = select(hedge_rows, scrub_rows, building_rows, at, heights, progress)
     append_elements(supplement, hedges, scrub)
     meta = supplement['arnis_dk']
     meta['hedges'] = {'height_model': bool(token), 'counts': counts}

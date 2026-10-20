@@ -174,7 +174,30 @@ def download_rows(register, where, at, key, transport=request_page):
     raise ValueError(f'{register}: page limit reached; reduce bbox')
 
 
-def linked_rows(register, ids, at, key, transport, field='id_lokalId'):
+def counted(results, phase, total, progress):
+    """Yields `results`, reporting `progress(phase, done, total)` before the first and after each."""
+    if progress:
+        progress(phase, 0, total)
+    for done, result in enumerate(results, 1):
+        if progress:
+            progress(phase, done, total)
+        yield result
+
+
+def progress_printer():
+    """Reports progress as `progress <phase> <done> <total>` lines that a caller, such as a
+    server's progress bar, can follow: the first and last of each phase, and about every tenth."""
+    shown = {}
+
+    def report(phase, done, total):
+        step = 10 * done // total if total else 10
+        if shown.get(phase) != step:
+            shown[phase] = step
+            print(f'progress {phase} {done} {total}', flush=True)
+    return report
+
+
+def linked_rows(register, ids, at, key, transport, field='id_lokalId', phase=None, progress=None):
     ids = sorted({identity(value) for value in ids if identity(value)})
 
     def batch_rows(batch):
@@ -185,10 +208,13 @@ def linked_rows(register, ids, at, key, transport, field='id_lokalId'):
     batches = [ids[start:start+100] for start in range(0, len(ids), 100)]
     # map() keeps the batches' order, so the result does not depend on timing.
     with ThreadPoolExecutor(WORKERS) as pool:
-        return [row for rows in pool.map(batch_rows, batches) for row in rows]
+        results = counted(pool.map(batch_rows, batches), phase or register, len(batches), progress)
+        return [row for rows in results for row in rows]
 
 
-def fetch(bbox, key, at=None, transport=request_page):
+def fetch(bbox, key, at=None, transport=request_page, progress=None):
+    """Buildings, BBR and DAR for `bbox`. `progress(phase, done, total)` hears each finished
+    request in the phases buildings, bbr, addresses, building-addresses and entrances."""
     bbox = bounds(','.join(map(str, bbox)), AREA_KM2)
     at = at or datetime.now(timezone.utc)
     if at.tzinfo is None:
@@ -197,8 +223,10 @@ def fetch(bbox, key, at=None, transport=request_page):
         return download_rows('GEODKV', {'geometri': {'intersects': {'wkt': wkt, 'crs': 25832}},
                                         'status': {'eq': 'Anlagt'}, 'geometristatus': {'eq': 'Endelig'}},
                              at, key, transport)
+    tiles = envelopes(bbox)
     with ThreadPoolExecutor(WORKERS) as pool:
-        outlines = unique([row for rows in pool.map(tile_rows, envelopes(bbox)) for row in rows], 'GEODKV')
+        outlines = unique([row for rows in counted(pool.map(tile_rows, tiles), 'buildings', len(tiles), progress)
+                           for row in rows], 'GEODKV')
     converted = []
     for row in outlines:
         if not active(row, 'Anlagt', at) or row.get('geometristatus') != 'Endelig' or row.get('metode3D') == 'Under terræn':
@@ -207,13 +235,15 @@ def fetch(bbox, key, at=None, transport=request_page):
         if not isinstance(geometry, dict) or geometry.get('crs') != 25832 or not isinstance(geometry.get('wkt'), str):
             raise ValueError('GeoDanmark geometry must be WKT in EPSG:25832')
         converted.append({**row, 'geometri': geometry['wkt']})
-    bbr = linked_rows('BBR', [row.get('BBRUUID') for row in converted], at, key, transport)
+    bbr = linked_rows('BBR', [row.get('BBRUUID') for row in converted], at, key, transport,
+                      phase='bbr', progress=progress)
     bbr = [{ALIASES.get(k, k): v for k, v in row.items()} for row in bbr if active(row, '6', at)]
-    dar = linked_rows('DAR', [row.get('husnummer') for row in bbr], at, key, transport)
+    dar = linked_rows('DAR', [row.get('husnummer') for row in bbr], at, key, transport,
+                      phase='addresses', progress=progress)
     # BBR names only the building's primary house number. Other entrances can
     # have their own DAR house numbers on the exact same GeoDanmark building.
     related = linked_rows('DAR', [row.get('id_lokalId') for row in converted], at, key,
-                          transport, field='geoDanmarkBygning')
+                          transport, field='geoDanmarkBygning', phase='building-addresses', progress=progress)
     dar_index = {}
     for source in (dar, related):
         seen = set()
@@ -226,7 +256,8 @@ def fetch(bbox, key, at=None, transport=request_page):
             seen.add(dar_id)
             dar_index[dar_id] = row
     dar = [dar_index[k] for k in sorted(dar_index)]
-    points = linked_rows('DAR_POINT', [row.get('adgangspunkt') for row in dar], at, key, transport)
+    points = linked_rows('DAR_POINT', [row.get('adgangspunkt') for row in dar], at, key, transport,
+                         phase='entrances', progress=progress)
     point_index = {}
     for point in points:
         if not active(point, '8', at):
@@ -263,7 +294,8 @@ def main():
     try:
         bbox = bounds(args.bbox, AREA_KM2)
         key = load_key(args.credentials_file)
-        outlines, bbr, dar, at = fetch(bbox, key)
+        progress = progress_printer()
+        outlines, bbr, dar, at = fetch(bbox, key, progress=progress)
         # Each successful run is an immutable local snapshot, usable by prepare.py offline.
         snapshot = args.output.parent / (args.output.stem + '-sources-' + at.strftime('%Y%m%dT%H%M%S%fZ'))
         paths = [snapshot / name for name in ('GeoDanmark-Bygning.json', 'BBR-Bygning.json', 'DAR-Husnummer.json')]
@@ -275,7 +307,7 @@ def main():
             token = load_token(args.credentials_file)
             if not token:
                 print('Note: no DATAFORSYNINGEN_TOKEN; only hedges GeoDanmark types as living are added.')
-            add(result, bbox, outlines, key, at, token)
+            add(result, bbox, outlines, key, at, token, progress=progress)
         result['arnis_dk']['download'] = {'service': 'Datafordeler GraphQL v2', 'snapshot': snapshot.name}
         atomic_json(args.output, result)
         print(json.dumps(result['arnis_dk']['counts'], indent=2))

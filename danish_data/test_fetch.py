@@ -11,7 +11,7 @@ from shapely import from_wkt
 from shapely.ops import unary_union
 
 from fetch import (ALIASES, AREA_KM2, ENTITIES, REQUEST_KM2, atomic_json, bounds, download_rows,
-                   fetch, linked_rows, load_key, request_page)
+                   fetch, linked_rows, load_key, progress_printer, request_page)
 
 
 NOW = datetime(2026, 10, 9, tzinfo=timezone.utc)
@@ -196,6 +196,36 @@ class FetchTests(unittest.TestCase):
             bounds('55.400,11.300,55.472,11.427')
         with self.assertRaisesRegex(ValueError, '100 square'):
             fetch([55.0, 11.0, 55.2, 11.3], 'key', NOW, lambda *_: self.fail('No request'))
+
+    def test_progress_follows_each_phase_to_its_end(self):
+        records = {
+            'GEODKV': [{'id_lokalId': 'geo', 'status': 'Anlagt', 'geometristatus': 'Endelig', 'BBRUUID': 'bbr',
+                        'geometri': {'crs': 25832, 'wkt': 'POLYGON EMPTY'}}],
+            'BBR': [{'id_lokalId': 'bbr', 'status': '6', 'husnummer': 'dar'}],
+            'DAR': [{'id_lokalId': 'dar', 'status': '3', 'adgangspunkt': 'point', 'geoDanmarkBygning': 'geo'}],
+            'DAR_POINT': [{'id_lokalId': 'point', 'status': '8'}]}
+        heard = []
+        fetch([55.400, 11.300, 55.472, 11.427], 'key', NOW, lambda register, *_: page(register, records[register]),
+              progress=lambda *call: heard.append(call))
+        phases = list(dict.fromkeys(phase for phase, _, _ in heard))
+        self.assertEqual(phases, ['buildings', 'bbr', 'addresses', 'building-addresses', 'entrances'])
+        for phase in phases:
+            calls = [(done, total) for name, done, total in heard if name == phase]
+            self.assertEqual(calls[0][0], 0)
+            self.assertEqual(calls[-1][0], calls[-1][1])
+        self.assertEqual([c for c in heard if c[0] == 'buildings'][-1], ('buildings', 9, 9))
+
+    def test_the_progress_lines_show_about_every_tenth_and_the_end(self):
+        report = progress_printer()
+        with patch('builtins.print') as printed:
+            for done in range(0, 101):
+                report('heights', done, 100)
+            report('bbr', 0, 0)
+        lines = [call.args[0] for call in printed.call_args_list]
+        self.assertEqual(lines[0], 'progress heights 0 100')
+        self.assertEqual(lines[-2], 'progress heights 100 100')
+        self.assertEqual(len(lines), 12)
+        self.assertEqual(lines[-1], 'progress bbr 0 0')
 
     def test_invalid_bbox_and_naive_time_fail_before_network(self):
         for value in ['55,11,55,12', 'nan,11,56,12', '55,11,56,12', '0,0,0.001,0.001']:

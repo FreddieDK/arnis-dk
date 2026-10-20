@@ -184,6 +184,24 @@ class HedgeTests(unittest.TestCase):
         self.assertEqual({key.split('/')[0] for key, _ in lines}, {'living', 'grown'})
         self.assertEqual((counts['untyped_kept'], counts['untyped_dropped']), (1, 1))
 
+    def test_hedge_progress_covers_the_queries_the_height_tiles_and_every_line(self):
+        def transport(register, query, variables, key):
+            entity = 'GEODKV_Hegn' if 'GEODKV_Hegn(' in query else 'GEODKV_KratBevoksning'
+            return {'data': {entity: {'nodes': ROWS if entity == 'GEODKV_Hegn' else SCRUB,
+                                      'pageInfo': {'hasNextPage': False}}}}
+
+        def opener(params):
+            return tiff(np.full((50, 50), 31.5 if params['coverage'] == 'dhm_overflade' else 30.0))
+
+        heard = []
+        supplement = {'arnis_dk': {'attribution': 'GeoDanmark'}, 'elements': []}
+        with patch.object(hedges, 'TILE_PX', 50):
+            hedges.add(supplement, [55.0, 11.0, 55.001, 11.001], [BUILDING], 'key', AT, token='t',
+                       transport=transport, opener=opener, progress=lambda *call: heard.append(call))
+        self.assertEqual(list(dict.fromkeys(phase for phase, _, _ in heard)), ['hedges', 'heights', 'selecting'])
+        self.assertEqual(heard[-1], ('selecting', len(ROWS), len(ROWS)))
+        self.assertIn(('hedges', 2, 2), heard)
+
     def test_a_dropped_tile_is_tried_again_and_a_lasting_failure_names_its_cause(self):
         from urllib.error import HTTPError
         calls = []
