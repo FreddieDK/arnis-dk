@@ -237,6 +237,41 @@ model is downloaded only around untyped lines, in 800 m tiles at 0.8 m
 resolution. Dropped requests are retried, and a lasting failure names its HTTP
 status or timeout.
 
+## Facade colours from oblique photos
+
+`skraafoto_facades.py` measures facade and roof colours in the Danish oblique
+aerial photos (skråfoto). Arnis then builds walls in those colours with
+`--mapillary-facades-dir`:
+
+```sh
+python danish_data/skraafoto_facades.py --bbox 55.677,12.585,55.681,12.595 \
+  --out facades --supplement buildings.json --credentials-file .local/datafordeler.env
+arnis --bbox 55.677,12.585,55.681,12.595 --danish-buildings buildings.json \
+  --mapillary-facades-dir facades ...
+```
+
+- **Photos:** each photo carries its camera position, rotation and lens. A point on a wall
+  is therefore projected straight into the photo, with no reconstruction from photos.
+- **Heights:** the Danish height model gives each wall its foot and top. A photo counts
+  as seeing a wall only when the line to the camera clears the surface model.
+- **Colours:**
+  - Walls are sampled per metre along the wall and per metre up it.
+  - Shaded walls are lifted by a shade-to-sun ratio measured over the whole run.
+  - Roofs take the median colour of their footprint in the straight-down photo.
+- **Matching:**
+  - Arnis matches walls by node id. Each wall also carries the ids a tile-archive
+    world gives its corners.
+  - The register houses from `--supplement` are sampled too: those Arnis adds beside
+    OSM buildings, and those it may put in place of a block.
+- **OSM input:** `--osm-index` reads the OSM buildings from a local index of a
+  Geofabrik extract (made with `--build-osm-index`) instead of Overpass. Multipolygon
+  buildings are not in the index.
+- **Credentials and speed:**
+  - It needs `DATAFORSYNINGEN_TOKEN`.
+  - The photo service limits each client address, so more parallel runs from one
+    address do not go faster.
+  - `--levels-cache` keeps each photo's colour levels between runs.
+
 ## API and implementation details
 
 | Register | GraphQL endpoint | Data |
@@ -244,7 +279,8 @@ status or timeout.
 | GeoDanmark | `https://graphql.datafordeler.dk/GEODKV/v2` | Footprints, IDs, BBR links, status and geometry metadata |
 | BBR | `https://graphql.datafordeler.dk/BBR/v2` | Building use, floor counts, materials, construction year and house-number links |
 | DAR | `https://graphql.datafordeler.dk/DAR/v2` | House numbers, full access addresses, building links and access points |
-| Danish height model | `https://api.dataforsyningen.dk/dhm_wcs_DAF` (WCS, token) | Surface and terrain heights, used only to check hedges |
+| Danish height model | `https://api.dataforsyningen.dk/dhm_wcs_DAF` (WCS, token) | Surface and terrain heights, for hedges and facade sampling |
+| Skråfoto | `https://api.dataforsyningen.dk/rest/skraafoto_api/v1.0` (STAC, token) | Oblique and straight-down photos with their cameras, for facade and roof colours |
 
 The importer does not request owners, residents or BBR units. It uses the same
 UTC snapshot for `registreringstid` and `virkningstid` across all queries.
@@ -263,6 +299,8 @@ when distributing a world and follow the source datasets' terms. Raw register
 extracts and credentials are not included in the repository.
 
 Implementation entry points: `fetch.py`, `prepare.py`, `hedges.py`,
+`skraafoto_facades.py`, [`src/danish_buildings.rs`](../src/danish_buildings.rs),
+[`src/mapillary/facades.rs`](../src/mapillary/facades.rs),
 [`src/danish_addresses.rs`](../src/danish_addresses.rs),
 [`src/danish_entrances.rs`](../src/danish_entrances.rs),
 [`src/element_processing/barriers.rs`](../src/element_processing/barriers.rs) and
@@ -277,9 +315,10 @@ cargo test --locked --no-default-features
 ```
 
 The Python tests run without network access or real credentials. They cover
-record linking, coordinates, pagination, hedge classification, failures and
-credential handling. Rust tests cover import, entrance placement, signs, hedges
-and tree rules. Automated
+record linking, coordinates, pagination, hedge classification, failures,
+credential handling, and the facade sampler's camera model, colours and block
+houses. Rust tests cover import, the block rule, entrance placement, signs,
+hedges and tree rules. Automated
 checks do not replace visual inspection of buildings and cell boundaries.
 
 - [GeoDanmark GraphQL](https://datafordeler.dk/dataoversigt/geodanmark-vektor/geodanmark-vektor-graphql/)

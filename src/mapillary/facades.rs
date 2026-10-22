@@ -8,7 +8,9 @@
 //! building is keyed by its way id. A relation building is matched through
 //! the outer rings the generator assembles from its member ways, and keyed by
 //! the synthetic way id `generate_building_from_relation` builds each ring
-//! under, because that is the id the wall builder asks with.
+//! under, because that is the id the wall builder asks with. A record may also
+//! carry the building's measured roof colour (`roof_colour`), which its roof
+//! takes when the OSM tags name none.
 //!
 //! Two ways to apply a wall:
 //! * blocks: every wall cell takes the palette block nearest its colour, window
@@ -303,6 +305,8 @@ pub struct FacadeStore {
     pub(super) walls: Vec<FacadeWall>,
     by_way: FnvHashMap<u64, Vec<usize>>,
     building_colour: FnvHashMap<u64, RGBTuple>,
+    /// The export's measured roof colours, keyed like `building_colour`.
+    roof_colour: FnvHashMap<u64, RGBTuple>,
     pub(super) cells: FnvHashMap<(i32, i32), CellRef>,
     /// World columns per way, so panel placement can walk one building.
     pub(super) way_cells: FnvHashMap<u64, Vec<(i32, i32)>>,
@@ -361,6 +365,29 @@ pub(super) fn store() -> Option<Arc<FacadeStore>> {
 #[cfg(test)]
 pub(crate) static TEST_GLOBALS: Mutex<()> = Mutex::new(());
 
+/// Colours keyed by the OSM object they were exported for, keyed instead by the
+/// ids the generator builds under: a way's own id, and every ring id of a
+/// relation.
+fn by_element(
+    colours: FnvHashMap<Owner, RGBTuple>,
+    relation_rings: &FnvHashMap<u64, Vec<u64>>,
+) -> FnvHashMap<u64, RGBTuple> {
+    let mut out = FnvHashMap::default();
+    for (owner, rgb) in colours {
+        match owner {
+            Owner::Way(id) => {
+                out.insert(id, rgb);
+            }
+            Owner::Relation(id) => {
+                for ring_id in relation_rings.get(&id).into_iter().flatten() {
+                    out.insert(*ring_id, rgb);
+                }
+            }
+        }
+    }
+    out
+}
+
 impl FacadeStore {
     /// Indexes the projected walls by the ids the generator asks with. A
     /// relation's colour is registered under every ring id it is built under.
@@ -377,23 +404,12 @@ impl FacadeStore {
                 by_way.entry(w.way_id).or_default().push(i);
             }
         }
-        let mut building_colour = FnvHashMap::default();
-        for (owner, rgb) in colours {
-            match owner {
-                Owner::Way(id) => {
-                    building_colour.insert(id, rgb);
-                }
-                Owner::Relation(id) => {
-                    for ring_id in projection.relation_rings.get(&id).into_iter().flatten() {
-                        building_colour.insert(*ring_id, rgb);
-                    }
-                }
-            }
-        }
+        let building_colour = by_element(colours, &projection.relation_rings);
         FacadeStore {
             walls,
             by_way,
             building_colour,
+            roof_colour: FnvHashMap::default(),
             cells: projection.cells,
             way_cells: projection.way_cells,
             wall_dir: projection.wall_dir,
@@ -412,6 +428,12 @@ impl FacadeStore {
     /// `element_id`.
     pub(super) fn building_colour(&self, element_id: u64) -> Option<RGBTuple> {
         self.building_colour.get(&element_id).copied()
+    }
+
+    /// The export's measured roof colour of the building built under
+    /// `element_id`.
+    fn roof_colour(&self, element_id: u64) -> Option<RGBTuple> {
+        self.roof_colour.get(&element_id).copied()
     }
 
     /// Whether this run takes only the colours from the lab: below two
@@ -642,6 +664,12 @@ pub fn building_colour(element_id: u64) -> Option<RGBTuple> {
     store()?.building_colour(element_id)
 }
 
+/// The export's measured roof colour, for the roof of a building whose OSM
+/// tags name none. Keyed like `has_building`.
+pub fn roof_colour(element_id: u64) -> Option<RGBTuple> {
+    store()?.roof_colour(element_id)
+}
+
 /// Whether the photo panels are on for this run. Buildings with panels are
 /// built as flat shells whatever the scale, since procedural ledges and window
 /// frames would poke through the photograph.
@@ -843,6 +871,10 @@ fn row_bands(cells: &[(RGBTuple, Class)], cols: u32, rows: u32) -> Vec<RGBTuple>
 struct Export {
     walls: Vec<FacadeWall>,
     colours: FnvHashMap<Owner, RGBTuple>,
+    /// The measured roof colour, for exports that carry one (the skråfoto
+    /// sampler does). Without it the roof derives from the wall block, which
+    /// is the facade's colour here, so a white house got a white roof.
+    roof_colours: FnvHashMap<Owner, RGBTuple>,
     /// Mapillary ids of every image whose pixels reached one of `walls`, which
     /// is who the world owes its attribution to.
     images: BTreeSet<String>,
@@ -855,6 +887,7 @@ fn load(dir: &Path) -> Result<Export, String> {
     let entries = std::fs::read_dir(dir).map_err(|e| format!("read {}: {e}", dir.display()))?;
     let mut walls = Vec::new();
     let mut colours = FnvHashMap::default();
+    let mut roof_colours = FnvHashMap::default();
     let mut images = BTreeSet::new();
 
     for entry in entries.flatten() {
@@ -882,15 +915,11 @@ fn load(dir: &Path) -> Result<Export, String> {
                 None => continue,
             }
         };
-        if let Some(rgb) = rec
-            .get("building_colour")
-            .and_then(|c| c.get("rgb"))
-            .and_then(|c| c.as_array())
-        {
-            if rgb.len() == 3 {
-                let c = |i: usize| rgb[i].as_u64().unwrap_or(0).min(255) as u8;
-                colours.insert(owner, (c(0), c(1), c(2)));
-            }
+        if let Some(rgb) = record_rgb(&rec, "building_colour") {
+            colours.insert(owner, rgb);
+        }
+        if let Some(rgb) = record_rgb(&rec, "roof_colour") {
+            roof_colours.insert(owner, rgb);
         }
         for w in rec
             .get("walls")
@@ -926,8 +955,19 @@ fn load(dir: &Path) -> Result<Export, String> {
     Ok(Export {
         walls,
         colours,
+        roof_colours,
         images,
     })
+}
+
+/// A record's `{"rgb": [r, g, b]}` colour under `key`.
+fn record_rgb(rec: &Value, key: &str) -> Option<RGBTuple> {
+    let rgb = rec.get(key)?.get("rgb")?.as_array()?;
+    if rgb.len() != 3 {
+        return None;
+    }
+    let c = |i: usize| rgb[i].as_u64().unwrap_or(0).min(255) as u8;
+    Some((c(0), c(1), c(2)))
 }
 
 /// Projects every exported wall onto the world grid for the buildings in
@@ -1363,6 +1403,7 @@ pub fn install(dir: &Path, elements: &[ProcessedElement], args: &Args, xzbbox: &
     let Export {
         mut walls,
         colours,
+        roof_colours,
         images,
     } = match load(dir) {
         Ok(v) => v,
@@ -1439,9 +1480,10 @@ pub fn install(dir: &Path, elements: &[ProcessedElement], args: &Args, xzbbox: &
             ""
         }
     );
-    set_store(Some(Arc::new(FacadeStore::build(
-        walls, colours, projection, displays, args.scale,
-    ))));
+    let roof_colour = by_element(roof_colours, &projection.relation_rings);
+    let mut store = FacadeStore::build(walls, colours, projection, displays, args.scale);
+    store.roof_colour = roof_colour;
+    set_store(Some(Arc::new(store)));
 }
 
 /// Block for a wall position, if a facade cell of the building built under
@@ -1978,6 +2020,28 @@ mod tests {
             serde_json::from_str(&preview_walls_json(&exports, PREVIEW_BOX).unwrap()).unwrap();
         assert_eq!(walls.len(), 1);
         assert_eq!(walls[0]["key"].as_str(), Some("good_0"));
+    }
+
+    /// The skråfoto sampler measures each roof; a record without the key, which
+    /// is every Mapillary export, leaves the roof to the wall block as before.
+    #[test]
+    fn roof_colours_load_with_the_building() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("w5.json"),
+            r#"{"way_id": 5, "building_colour": {"rgb": [200, 190, 180]},
+                "roof_colour": {"rgb": [180, 80, 60]}, "walls": []}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("w6.json"),
+            r#"{"way_id": 6, "building_colour": {"rgb": [200, 190, 180]}, "walls": []}"#,
+        )
+        .unwrap();
+        let export = load(tmp.path()).unwrap();
+        assert_eq!(export.roof_colours.get(&Owner::Way(5)), Some(&(180, 80, 60)));
+        assert_eq!(export.roof_colours.get(&Owner::Way(6)), None);
+        assert_eq!(export.colours.get(&Owner::Way(6)), Some(&(200, 190, 180)));
     }
 
     #[test]

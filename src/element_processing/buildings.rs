@@ -11905,7 +11905,9 @@ fn generate_roof(
         abs_terrain_offset,
     );
 
-    // OSM roof:material / roof:colour override the preset.
+    // OSM roof:material / roof:colour override the preset, and so does a roof
+    // colour measured with the facades: without it the roof derives from the
+    // wall block, which is then the photographed facade's colour.
     let mut roof_rng = element_rng(style_seed ^ 0xF00F_C010_BA5E_F00D);
     let osm_roof_block = element
         .tags
@@ -11916,6 +11918,7 @@ fn generate_roof(
                 .tags
                 .get("roof:colour")
                 .and_then(|c| color_text_to_rgb_tuple(c))
+                .or_else(|| crate::mapillary::facades::roof_colour(element.id))
                 .map(|rgb| crate::block_palette::roof_block_for_color(rgb, &mut roof_rng))
         });
 
