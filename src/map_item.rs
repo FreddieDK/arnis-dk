@@ -61,6 +61,14 @@ impl MapStore {
         write_gzip_nbt(&self.dir.join(name), map_dat)
     }
 
+    fn has_map(&self, map_id: i32) -> bool {
+        let name = match self.layout {
+            WorldLayout::Legacy => format!("map_{map_id}.dat"),
+            WorldLayout::Dimensions => format!("{map_id}.dat"),
+        };
+        self.dir.join(name).is_file()
+    }
+
     fn write_counter(&self, last_id: i32) -> Result<(), String> {
         let name = match self.layout {
             WorldLayout::Legacy => "idcounts.dat",
@@ -425,8 +433,12 @@ pub fn write_decal_maps(
             step: *step,
         });
 
-    // Render, encode and gzip are independent per decal.
-    let entries: Vec<_> = registry.iter().collect();
+    // Render, encode and gzip are independent per decal. Maps an earlier area
+    // wrote are shown again, never rewritten.
+    let entries: Vec<_> = registry
+        .iter()
+        .filter(|(k, _)| !registry.is_reused(k))
+        .collect();
     // Fills the 97-99.5 band; on large areas this outlasts the region write.
     // Counted in map tiles, not entries: an entry spans 1 to 6 tiles and both the
     // render and the write scale with that.
@@ -469,6 +481,84 @@ pub fn write_decal_maps(
 
     store.write_counter(highest)?;
     Ok(written)
+}
+
+/// Where a One World keeps its decal index.
+const DECAL_INDEX: &str = "arnis_one_world/decal-index.json";
+
+/// Bump when decal rendering changes, so a world stops reusing the old images.
+const DECAL_INDEX_VERSION: u32 = 1;
+
+/// The world's decal index: the maps earlier areas wrote for each shareable key.
+/// An entry whose map files are gone is dropped, so it is drawn again.
+pub fn load_decal_index(world_path: &Path) -> crate::decals::DecalIndex {
+    let Ok(text) = std::fs::read_to_string(world_path.join(DECAL_INDEX)) else {
+        return Default::default();
+    };
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Default::default();
+    };
+    if doc.get("version").and_then(|v| v.as_u64()) != Some(u64::from(DECAL_INDEX_VERSION)) {
+        return Default::default();
+    }
+    let Ok(store) = MapStore::open(world_path) else {
+        return Default::default();
+    };
+    let mut index = crate::decals::DecalIndex::new();
+    let Some(decals) = doc.get("decals").and_then(|d| d.as_object()) else {
+        return index;
+    };
+    for (name, value) in decals {
+        let Some([base, cols, rows]) = value.as_array().and_then(|a| {
+            let n: Vec<i64> = a.iter().filter_map(|v| v.as_i64()).collect();
+            <[i64; 3]>::try_from(n).ok()
+        }) else {
+            continue;
+        };
+        let (Ok(base_id), Ok(cols), Ok(rows)) = (
+            i32::try_from(base),
+            u32::try_from(cols),
+            u32::try_from(rows),
+        ) else {
+            continue;
+        };
+        let entry = crate::decals::registry::DecalEntry {
+            base_id,
+            cols,
+            rows,
+        };
+        let present = (0..rows).all(|r| (0..cols).all(|c| store.has_map(entry.tile_id(c, r))));
+        if present {
+            index.insert(name.clone(), entry);
+        }
+    }
+    index
+}
+
+/// Adds this area's shareable decals to the world's index.
+pub fn save_decal_index(
+    world_path: &Path,
+    previous: &crate::decals::DecalIndex,
+    registry: &DecalRegistry,
+) -> Result<(), String> {
+    let mut decals = serde_json::Map::new();
+    let mut all: Vec<(String, crate::decals::registry::DecalEntry)> = previous
+        .iter()
+        .map(|(k, e)| (k.clone(), *e))
+        .chain(registry.index_entries())
+        .collect();
+    all.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, e) in all {
+        decals.insert(name, serde_json::json!([e.base_id, e.cols, e.rows]));
+    }
+    let doc = serde_json::json!({ "version": DECAL_INDEX_VERSION, "decals": decals });
+    let path = world_path.join(DECAL_INDEX);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {parent:?}: {e}"))?;
+    }
+    let text = serde_json::to_string(&doc).map_err(|e| e.to_string())?;
+    crate::world_utils::replace_file_atomically(&path, text.as_bytes())
+        .map_err(|e| format!("write {path:?}: {e}"))
 }
 
 #[cfg(test)]
@@ -603,6 +693,42 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    #[test]
+    fn a_later_area_reuses_the_maps_of_signs_the_world_already_has() {
+        use crate::decals::{DecalKey, TextStyle, TrafficSign};
+        let tmp = tempfile::tempdir().unwrap();
+        let world =
+            std::path::PathBuf::from(crate::world_utils::create_new_world(tmp.path()).unwrap());
+        let stop = DecalKey::Traffic(TrafficSign::Stop);
+        let first: std::collections::BTreeSet<DecalKey> =
+            [stop.clone(), DecalKey::text(TextStyle::Fascia, "Bakery", 2)].into();
+        let reg1 = DecalRegistry::from_keys_starting_at(first, next_map_id(&world.join("data")));
+        assert_eq!(write_decal_maps(&world, &reg1, None).unwrap(), 3);
+        save_decal_index(&world, &Default::default(), &reg1).unwrap();
+
+        let index = load_decal_index(&world);
+        assert_eq!(index.len(), 2);
+        let second: std::collections::BTreeSet<DecalKey> =
+            [stop.clone(), DecalKey::Pictogram("cafe")].into();
+        let reg2 =
+            DecalRegistry::from_keys_reusing(second, next_map_id(&world.join("data")), &index);
+        assert_eq!(reg2.get(&stop), reg1.get(&stop));
+        let stop_file = world.join(format!("data/map_{}.dat", reg1.get(&stop).unwrap().base_id));
+        let before = std::fs::metadata(&stop_file).unwrap().modified().unwrap();
+        // Only the cafe is new.
+        assert_eq!(write_decal_maps(&world, &reg2, None).unwrap(), 1);
+        assert_eq!(
+            std::fs::metadata(&stop_file).unwrap().modified().unwrap(),
+            before
+        );
+        save_decal_index(&world, &index, &reg2).unwrap();
+        assert_eq!(load_decal_index(&world).len(), 3);
+
+        // A map that has gone missing is drawn again rather than shown blank.
+        std::fs::remove_file(&stop_file).unwrap();
+        assert!(!load_decal_index(&world).contains_key(&stop.index_name()));
     }
 
     #[test]

@@ -10,4 +10,4 @@ pub mod registry;
 pub mod render;
 pub mod templates;
 
-pub use registry::{DecalKey, DecalRegistry, ShieldStyle, TextStyle, TrafficSign};
+pub use registry::{DecalIndex, DecalKey, DecalRegistry, ShieldStyle, TextStyle, TrafficSign};

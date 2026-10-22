@@ -800,9 +800,24 @@ pub fn generate_world_with_options(
     } else {
         crate::decals::registry::DecalRegistry::FIRST_ID
     };
+    // A One World shows one map per distinct sign, across all of its areas.
+    let decal_index = if one_world.is_some() && world_format == WorldFormat::JavaAnvil {
+        crate::map_item::load_decal_index(&output_path)
+    } else {
+        Default::default()
+    };
     let signage_ctx: Option<Arc<signage::SignageContext>> = (world_format
         == WorldFormat::JavaAnvil)
-        .then(|| signage::build_context(&elements, args, llbbox, &xzbbox, first_decal_id))
+        .then(|| {
+            signage::build_context(
+                &elements,
+                args,
+                llbbox,
+                &xzbbox,
+                first_decal_id,
+                &decal_index,
+            )
+        })
         .flatten()
         .map(Arc::new);
     if let (Some(t), Some(_)) = (signage_start, signage_ctx.as_ref()) {
@@ -1853,7 +1868,23 @@ pub fn generate_world_with_options(
     if let Some(ctx) = &signage_ctx {
         let t = args.benchmark.then(std::time::Instant::now);
         match crate::map_item::write_decal_maps(&output_path, &ctx.registry, preview.as_deref()) {
-            Ok(n) => println!("Wrote {n} signage map tiles."),
+            Ok(n) => {
+                let reused = ctx
+                    .registry
+                    .iter()
+                    .filter(|(k, _)| ctx.registry.is_reused(k))
+                    .count();
+                println!(
+                    "Wrote {n} signage map tiles; {reused} signs reuse maps already in the world."
+                );
+                if one_world.is_some() {
+                    if let Err(e) =
+                        crate::map_item::save_decal_index(&output_path, &decal_index, &ctx.registry)
+                    {
+                        eprintln!("Warning: Failed to update the decal index: {e}");
+                    }
+                }
+            }
             Err(e) => eprintln!("Warning: Failed to create signage maps: {e}"),
         }
         if let Some(t) = t {

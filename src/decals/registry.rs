@@ -2,7 +2,7 @@
 //! consecutive map ids before placement, so tile threads only read it and ids are stable.
 
 use super::region::BladeStyle;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Look of a rendered text sign.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -109,6 +109,17 @@ impl DecalKey {
         }
     }
 
+    /// Whether the image is the same wherever the key appears, so a world can
+    /// show one map for all of them. A "you are here" board draws its own spot.
+    pub fn shareable(&self) -> bool {
+        !matches!(self, DecalKey::LocalMap { .. })
+    }
+
+    /// The key's name in a world's decal index.
+    pub fn index_name(&self) -> String {
+        format!("{self:?}")
+    }
+
     pub fn text(style: TextStyle, text: impl Into<String>, cols: u8) -> DecalKey {
         DecalKey::Text {
             style,
@@ -132,11 +143,17 @@ impl DecalEntry {
     }
 }
 
+/// A world's decals by `DecalKey::index_name`: maps already written that a
+/// later area can show again.
+pub type DecalIndex = HashMap<String, DecalEntry>;
+
 /// Deterministic key -> map id assignment.
 #[derive(Debug, Default)]
 pub struct DecalRegistry {
     entries: HashMap<DecalKey, DecalEntry>,
     ordered: Vec<DecalKey>,
+    /// Keys shown with maps an earlier area of the world wrote.
+    reused: HashSet<DecalKey>,
     next_id: i32,
     first_id: i32,
 }
@@ -153,26 +170,58 @@ impl DecalRegistry {
 
     /// For a world that already holds maps.
     pub fn from_keys_starting_at(keys: BTreeSet<DecalKey>, first_id: i32) -> Self {
+        Self::from_keys_reusing(keys, first_id, &DecalIndex::new())
+    }
+
+    /// Keys the world's index already holds keep those maps; the rest get new
+    /// ids from `first_id` on. A stop sign then is one map in the whole world,
+    /// not one per generated area.
+    pub fn from_keys_reusing(keys: BTreeSet<DecalKey>, first_id: i32, index: &DecalIndex) -> Self {
         let mut reg = DecalRegistry {
             entries: HashMap::with_capacity(keys.len()),
             ordered: Vec::with_capacity(keys.len()),
+            reused: HashSet::new(),
             next_id: first_id,
             first_id,
         };
         for key in keys {
             let (cols, rows) = key.dims();
-            reg.entries.insert(
-                key.clone(),
-                DecalEntry {
-                    base_id: reg.next_id,
-                    cols,
-                    rows,
-                },
-            );
-            reg.next_id += (cols * rows) as i32;
+            let known = key
+                .shareable()
+                .then(|| index.get(&key.index_name()))
+                .flatten()
+                .filter(|e| (e.cols, e.rows) == (cols, rows));
+            let entry = match known {
+                Some(&e) => {
+                    reg.reused.insert(key.clone());
+                    e
+                }
+                None => {
+                    let e = DecalEntry {
+                        base_id: reg.next_id,
+                        cols,
+                        rows,
+                    };
+                    reg.next_id += (cols * rows) as i32;
+                    e
+                }
+            };
+            reg.entries.insert(key.clone(), entry);
             reg.ordered.push(key);
         }
         reg
+    }
+
+    /// True when the key shows a map an earlier area wrote, so it is not written again.
+    pub fn is_reused(&self, key: &DecalKey) -> bool {
+        self.reused.contains(key)
+    }
+
+    /// The registry's shareable keys, for the world's index.
+    pub fn index_entries(&self) -> impl Iterator<Item = (String, DecalEntry)> + '_ {
+        self.iter()
+            .filter(|(k, _)| k.shareable())
+            .map(|(k, e)| (k.index_name(), e))
     }
 
     pub fn get(&self, key: &DecalKey) -> Option<DecalEntry> {
@@ -233,6 +282,49 @@ mod tests {
         assert_eq!(poster.tile_id(2, 1), 5 + 5);
         assert_eq!(reg.max_id(), 10);
         assert_eq!(reg.tile_count(), 9);
+    }
+
+    #[test]
+    fn keys_in_the_world_index_keep_their_maps() {
+        let stop = DecalKey::Traffic(TrafficSign::Stop);
+        let bakery = DecalKey::text(TextStyle::Fascia, "Bakery", 2);
+        let here = DecalKey::LocalMap { x: 5, z: -3 };
+        let mut index = DecalIndex::new();
+        index.insert(
+            stop.index_name(),
+            DecalEntry {
+                base_id: 7,
+                cols: 1,
+                rows: 1,
+            },
+        );
+        // A plate drawn at another width is a different image.
+        index.insert(
+            bakery.index_name(),
+            DecalEntry {
+                base_id: 8,
+                cols: 3,
+                rows: 1,
+            },
+        );
+        index.insert(
+            here.index_name(),
+            DecalEntry {
+                base_id: 11,
+                cols: 2,
+                rows: 2,
+            },
+        );
+        let keys: BTreeSet<DecalKey> = [stop.clone(), bakery.clone(), here.clone()].into();
+        let reg = DecalRegistry::from_keys_reusing(keys, 100, &index);
+        assert_eq!(reg.get(&stop).unwrap().base_id, 7);
+        assert!(reg.is_reused(&stop));
+        assert!(!reg.is_reused(&bakery) && reg.get(&bakery).unwrap().base_id >= 100);
+        // A "you are here" board draws its own spot, so it is never shared.
+        assert!(!reg.is_reused(&here) && reg.get(&here).unwrap().base_id >= 100);
+        assert_eq!(reg.tile_count(), 2 + 4, "only the new maps count");
+        let names: Vec<String> = reg.index_entries().map(|(n, _)| n).collect();
+        assert!(names.contains(&stop.index_name()) && !names.contains(&here.index_name()));
     }
 
     #[test]
