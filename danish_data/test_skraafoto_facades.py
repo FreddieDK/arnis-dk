@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import math
 import unittest
@@ -97,6 +99,51 @@ class Camera(unittest.TestCase):
         a = sf.Photo(NORTH).project(np.array([725731.7]), np.array([6176293.5]), np.array([12.0]))
         b = sf.Photo(side).project(np.array([725731.7]), np.array([6176293.5]), np.array([12.0]))
         self.assertAlmostEqual(float(a[1][0] - b[1][0]), 6.68 / 0.00376, places=3)
+
+
+class SkippedPhotos(unittest.TestCase):
+    """A photo the service will not serve is skipped for the rest of the run, not its building."""
+
+    def setUp(self):
+        sf._SKIPPED.clear()
+        self.opened = []
+        self.real_open = sf.open_photo
+
+        def open_photo(url):
+            self.opened.append(url)
+            raise OSError('HTTP response code: 404')
+        sf.open_photo = open_photo
+
+    def tearDown(self):
+        sf.open_photo = self.real_open
+        sf._SKIPPED.clear()
+
+    def photo(self, pid):
+        item = json.loads(json.dumps(NORTH))
+        item['id'] = pid
+        item['assets']['data']['href'] = f'https://example.invalid/{pid}.tif'
+        return sf.Photo(item)
+
+    def test_a_photo_that_fails_gives_no_view_and_is_not_tried_again(self):
+        photo = self.photo('missing')
+        bounds = (725725.0, 6176287.0, 725738.0, 6176300.0)
+        log = io.StringIO()
+        with contextlib.redirect_stdout(log):
+            self.assertIsNone(photo.view(bounds, 0.0, 20.0))
+            self.assertIsNone(photo.view(bounds, 0.0, 20.0), 'the next building does not wait on it')
+        self.assertEqual(len(self.opened), 1)
+        self.assertIn('photo missing skipped for the rest of this run: OSError: HTTP response code: 404', log.getvalue())
+        self.assertEqual(log.getvalue().count('skipped'), 1, 'logged once')
+        self.assertEqual(sf.skipped_photos(), {'missing': 'OSError: HTTP response code: 404'})
+
+    def test_the_index_passes_a_skipped_photo_over_for_the_next_best(self):
+        index = sf.PhotoIndex.__new__(sf.PhotoIndex)
+        bad, good = self.photo('bad'), self.photo('good')
+        index.by_direction = {'north': [bad, good]}
+        self.assertIs(index.best('north', 725731.7, 6176293.5, 12.0), bad)
+        with contextlib.redirect_stdout(io.StringIO()):
+            sf.skip_photo(bad, OSError('HTTP response code: 404'))
+        self.assertIs(index.best('north', 725731.7, 6176293.5, 12.0), good)
 
 
 class Colour(unittest.TestCase):

@@ -432,7 +432,18 @@ class Photo:
 
     def view(self, bounds, zmin, zmax, pad=16):
         """The pixels that show `bounds` (UTM) between the two heights, levelled, or None
-        when that part of the ground is not in the photo."""
+        when that part of the ground is not in the photo, or the photo cannot be read: a
+        photo that fails is skipped for the rest of the run (see skip_photo), not the
+        building."""
+        if photo_skipped(self.url):
+            return None
+        try:
+            return self._view(bounds, zmin, zmax, pad)
+        except Exception as error:
+            skip_photo(self, error)
+            return None
+
+    def _view(self, bounds, zmin, zmax, pad):
         from rasterio.windows import Window
 
         x0, y0, x1, y1 = bounds
@@ -488,10 +499,35 @@ OPEN_PHOTOS = 512
 _READERS = None
 # Folder of each photo's levels, shared by the runs on one machine (--levels-cache).
 LEVELS_CACHE = None
-# Tries at opening or reading a photo before its building is given up. When the photo
-# service answered 404 for files it holds, every further try only cost the building's
-# neighbours their turn.
-PHOTO_ATTEMPTS = 2
+# Tries at opening or reading a photo before it is skipped. When the photo service
+# answered 404 for files it holds, every further try only cost the building's neighbours
+# their turn; the next best photo of the direction serves the building instead.
+PHOTO_ATTEMPTS = 1
+# Photos that failed those tries, by URL, with why: skipped for the rest of the run, so
+# no other building waits on them again. PhotoIndex.best passes them over, and the
+# building takes the next best photo of that direction.
+_SKIPPED = {}
+
+
+def photo_skipped(url):
+    with _OPEN_LOCK:
+        return url in _SKIPPED
+
+
+def skip_photo(photo, error):
+    """Marks `photo` unreadable for the rest of the run and logs it, once."""
+    reason = f'{type(error).__name__}: {error}'[:160]
+    with _OPEN_LOCK:
+        if photo.url in _SKIPPED:
+            return
+        _SKIPPED[photo.url] = (photo.id, reason)
+    print(f'  photo {photo.id} skipped for the rest of this run: {reason}', flush=True)
+
+
+def skipped_photos():
+    """The photos skipped so far, as {id: reason}."""
+    with _OPEN_LOCK:
+        return dict(_SKIPPED.values())
 
 
 def open_photo(url):
@@ -622,9 +658,12 @@ class PhotoIndex:
         return sum(len(v) for v in self.by_direction.values())
 
     def best(self, direction, x, y, z):
-        """The photo of `direction` that shows (x, y, z) nearest its middle, or None."""
+        """The photo of `direction` that shows (x, y, z) nearest its middle, or None.
+        Photos skipped as unreadable are passed over."""
         best, best_d = None, 0.45
         for photo in self.by_direction[direction]:
+            if photo_skipped(photo.url):
+                continue
             c, r = photo.project(np.array([x]), np.array([y]), np.array([z]))
             d = max(abs(c[0] / photo.cols - 0.5), abs(r[0] / photo.rows - 0.5))
             if d < best_d:
@@ -874,12 +913,24 @@ def sample_building(rings, utm, heights, index):
     hx, hy = np.meshgrid(np.arange(x0 - reach, x1 + reach, 4.0), np.arange(y0 - reach, y1 + reach, 4.0))
     zmax = float(np.nanmax(heights.sample(hx, hy, 1))) + 1.0
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    photos = [p for p in (index.best(d, cx, cy, (zmin + ztop) / 2) for d in DIRECTIONS + ('nadir',)) if p]
+
+    def view_of(direction):
+        # The best photo of the direction; one that cannot be read is skipped, and the next
+        # best tried in its place.
+        for _ in range(3):
+            photo = index.best(direction, cx, cy, (zmin + ztop) / 2)
+            if photo is None:
+                return None
+            view = photo.view((x0, y0, x1, y1), zmin, ztop)
+            if not photo_skipped(photo.url):
+                return view
+        return None
+
     if _READERS:
-        pending = [_READERS.submit(p.view, (x0, y0, x1, y1), zmin, ztop) for p in photos]
+        pending = [_READERS.submit(view_of, d) for d in DIRECTIONS + ('nadir',)]
         views = [v for v in (f.result() for f in pending) if v is not None]
     else:
-        views = [v for v in (p.view((x0, y0, x1, y1), zmin, ztop) for p in photos) if v is not None]
+        views = [v for v in (view_of(d) for d in DIRECTIONS + ('nadir',)) if v is not None]
     oblique = [v for v in views if v.direction != 'nadir']
     walls = []
     for ring in rings:
@@ -1070,16 +1121,22 @@ def main(argv=None):
         if (i + 1) % 500 == 0:
             print(f'  {i + 1}/{len(owners)} buildings, {walls_total} walls, '
                   f'{time.time() - started:.0f} s', flush=True)
-    write_manifest(args, (s, w, n, e), sorted(used), gain, buildings_done, walls_total, started, failed)
+    skipped = skipped_photos()
+    write_manifest(args, (s, w, n, e), sorted(used), gain, buildings_done, walls_total, started, failed, skipped)
+    if skipped:
+        print(f'{len(skipped)} photos skipped as unreadable: {", ".join(sorted(skipped))}', flush=True)
     print(f'{buildings_done} of {len(owners)} buildings got {walls_total} facade walls in {args.out} '
           f'({failed} failed, {time.time() - started:.0f} s)')
 
 
-def write_manifest(args, bbox, photos, gain, buildings, walls, started, failed=0):
+def write_manifest(args, bbox, photos, gain, buildings, walls, started, failed=0, skipped=None):
     manifest = {
         'source': 'skraafoto', 'collection': args.collection, 'bbox': list(bbox),
         'photos': photos, 'shadow_gain': None if gain is None else gain.round(3).tolist(),
         'buildings': buildings, 'walls': walls, 'failed': failed,
+        # Photos the service would not serve during the run, {id: why}: their buildings were
+        # sampled from the other photos, or the next best of the direction.
+        'skipped_photos': skipped or {},
         'seconds': round(time.time() - started, 1),
         'attribution': 'Skråfoto og Danmarks Højdemodel: Klimadatastyrelsen. Bygninger: OpenStreetMap-bidragydere'
                        + (', GeoDanmark' if args.supplement else '') + '.',
