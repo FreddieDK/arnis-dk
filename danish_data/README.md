@@ -196,6 +196,11 @@ These commands affect every frame of the given type within 16 blocks. No server
 plugin is required. When moving a world, keep `entities/`, `data/map_*.dat`,
 `region/` and the rest of the world folder together.
 
+In a One World, a sign whose image is the same wherever it stands (a street name,
+a speed limit, a stop sign) is drawn once for the whole world. Later areas show its
+map again, listed in `arnis_one_world/decal-index.json`, so a large world does not
+carry the same image thousands of times. "You are here" boards draw their own spot.
+
 ## Urban trees
 
 Tree roots require natural ground, including grass, soil, moss, mud, sand or
@@ -266,11 +271,8 @@ arnis --bbox 55.677,12.585,55.681,12.595 --danish-buildings buildings.json \
 - **OSM input:** `--osm-index` reads the OSM buildings from a local index of a
   Geofabrik extract (made with `--build-osm-index`) instead of Overpass. Multipolygon
   buildings are not in the index.
-- **Credentials and speed:**
-  - It needs `DATAFORSYNINGEN_TOKEN`.
-  - The photo service limits each client address, so more parallel runs from one
-    address do not go faster.
-  - `--levels-cache` keeps each photo's colour levels between runs.
+- **Token:** it needs `DATAFORSYNINGEN_TOKEN`.
+- **Cache:** `--levels-cache` keeps each photo's colour levels between runs.
 
 ## API and implementation details
 

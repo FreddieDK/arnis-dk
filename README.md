@@ -13,10 +13,15 @@ integration focuses on buildings and addresses.
 | **GeoDanmark** | Building footprints, including courtyards and complex outlines; hedges and scrub |
 | **BBR** | Building use, floor counts, wall and roof materials |
 | **DAR** | Addresses and qualified entrance or facade positions |
-| **Danish height model** | Telling living hedges apart from fences |
+| **Danish height model** | Telling living hedges apart from fences; which walls an oblique photo sees |
+| **Skråfoto** (oblique aerial photos) | Facade and roof colours |
 
 - Adds missing building footprints and fills gaps in existing building data.
+- Splits a city block drawn as one OpenStreetMap outline into the GeoDanmark houses inside it, so an old-town street gets its separate houses instead of one flat building.
+- Colours facades and roofs from the [Danish oblique aerial photos](danish_data/README.md#facade-colours-from-oblique-photos): walls in the colours the photos see, shaded walls lifted to sunlit, roofs from the straight-down photo.
 - Improves entrance placement and adds full addresses on ordinary Minecraft signs.
+- Draws a sign whose image is the same everywhere (street names, speed limits, stop signs) once for a whole One World, not once for every area generated.
+- Keeps downloaded Danish data in a [local store](danish_data/README.md#local-store) of 3 × 3 km tiles that later worlds reuse.
 - Reduces generated trees in urban areas while preserving forest density.
 - Grows real garden hedges and scrub where GeoDanmark and the height model show them: never inside buildings or on paving, each hedge in a one-block strip of lawn.
 - Builds wind turbines at their real size from OpenStreetMap (hub height, rotor diameter, tip height; typical Danish size when untagged), shrunk only where they would reach the build height.
@@ -37,7 +42,8 @@ to adopt them.
 
 You need Rust and Python 3.12+. Live Danish data downloads require your own
 Datafordeler API key; downloaded register extracts can also be imported. An
-optional Dataforsyningen token lets the hedge check use the Danish height model.
+optional Dataforsyningen token lets the hedge check use the Danish height model; the
+facade colours need it for the oblique photos.
 
 1. Install the Python dependencies from `danish_data/requirements.txt`.
 2. Use `danish_data/fetch.py` to prepare a building supplement for your area,
