@@ -488,6 +488,10 @@ OPEN_PHOTOS = 512
 _READERS = None
 # Folder of each photo's levels, shared by the runs on one machine (--levels-cache).
 LEVELS_CACHE = None
+# Tries at opening or reading a photo before its building is given up. When the photo
+# service answered 404 for files it holds, every further try only cost the building's
+# neighbours their turn.
+PHOTO_ATTEMPTS = 2
 
 
 def open_photo(url):
@@ -502,12 +506,12 @@ def open_photo(url):
         if url in _OPEN:
             _OPEN.move_to_end(url)
             return _OPEN[url]
-    for attempt in range(4):
+    for attempt in range(PHOTO_ATTEMPTS):
         try:
             src = rasterio.open(url)
             break
         except Exception:
-            if attempt == 3:
+            if attempt == PHOTO_ATTEMPTS - 1:
                 raise
             time.sleep(2 ** (attempt + 1))
     with _OPEN_LOCK:
@@ -518,11 +522,11 @@ def open_photo(url):
 
 
 def read_retrying(src, **kwargs):
-    for attempt in range(4):
+    for attempt in range(PHOTO_ATTEMPTS):
         try:
             return src.read(indexes=[1, 2, 3], **kwargs)
         except Exception:
-            if attempt == 3:
+            if attempt == PHOTO_ATTEMPTS - 1:
                 raise
             time.sleep(2 ** (attempt + 1))
 
@@ -1013,7 +1017,7 @@ def main(argv=None):
     for key, value in (('GDAL_DISABLE_READDIR_ON_OPEN', 'EMPTY_DIR'), ('CPL_VSIL_CURL_ALLOWED_EXTENSIONS', '.tif'),
                        ('GDAL_HTTP_MULTIRANGE', 'YES'), ('GDAL_HTTP_MERGE_CONSECUTIVE_RANGES', 'YES'),
                        ('GDAL_CACHEMAX', '1024'), ('VSI_CACHE', 'TRUE'), ('VSI_CACHE_SIZE', '134217728'),
-                       ('GDAL_HTTP_MAX_RETRY', '4'), ('GDAL_HTTP_RETRY_DELAY', '2')):
+                       ('GDAL_HTTP_MAX_RETRY', str(PHOTO_ATTEMPTS - 1)), ('GDAL_HTTP_RETRY_DELAY', '2')):
         os.environ.setdefault(key, value)
     s, w, n, e = (float(v) for v in args.bbox.split(','))
     args.out.mkdir(parents=True, exist_ok=True)
