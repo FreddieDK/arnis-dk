@@ -129,6 +129,17 @@ can supply addresses but cannot improve door placement.
   least 60% intersection-over-union can receive missing properties. New
   GeoDanmark footprints are added only when they do not overlap existing
   buildings; shared edges are allowed. Ambiguous overlaps are omitted.
+- One exception: an OSM building drawn as a single outline over a whole block
+  gives way to the GeoDanmark houses inside it. Several conditions must all hold:
+  - At least three houses lie mostly inside the outline. Sheds, garages, carports
+    and houses under 25 m² do not count.
+  - Together the houses cover 60–110% of the outline, and no single house covers
+    more than 75%.
+  - The building is not a church, chapel, castle or `historic` building.
+
+  The houses keep the outline's colour, material and floor count where the
+  register has none. Without this, an old-town street drawn as one block in OSM
+  became one flat building, and its houses were dropped as overlaps.
 - Overture runs after the Danish merge and checks against the resulting
   footprints. Unknown material codes are not translated. Absolute GeoDanmark
   Z coordinates are not treated as building heights; heights derived from
