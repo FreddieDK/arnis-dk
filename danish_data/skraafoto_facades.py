@@ -803,6 +803,9 @@ def shadow_gain(samples):
     the shaded ones over every wall of the run: the ratio of their medians. A shaded wall
     is lit by the blue sky alone; in the first trial that turned Charlottenborg's red
     brick, on the shaded side of Nyhavn, into dark violet grey."""
+    if not samples:
+        # No wall came out of the spread (a cell of one shed seen in no photo): nothing to lift.
+        return np.ones(3, dtype=np.float32), 0, 0
     sun, shade = [], []
     for w in samples:
         valid = ~np.isnan(w['tex']).any(axis=1)

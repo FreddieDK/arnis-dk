@@ -172,6 +172,11 @@ class Colour(unittest.TestCase):
         gain, _, _ = sf.shadow_gain([{'tex': tex, 'lit': np.r_[np.ones(150, bool), np.zeros(150, bool)]}])
         np.testing.assert_array_equal(gain, [1.0, 1.0, 1.0])
 
+    def test_no_walls_at_all_leave_the_colours_alone(self):
+        gain, n_sun, n_shade = sf.shadow_gain([])
+        np.testing.assert_array_equal(gain, [1.0, 1.0, 1.0])
+        self.assertEqual((n_sun, n_shade), (0, 0))
+
 
 class Sun(unittest.TestCase):
     def test_late_morning_in_copenhagen_in_april(self):
