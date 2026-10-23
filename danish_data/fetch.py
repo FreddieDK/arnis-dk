@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from pyproj import Transformer
+import mcdk_cache
 from prepare import active, identity, prepare
 
 
@@ -37,6 +38,8 @@ def load_key(path=None):
         values = dict(line.strip().split('=', 1) for line in Path(path).read_text(encoding='utf-8-sig').splitlines()
                       if line.strip() and not line.lstrip().startswith('#') and '=' in line)
         key = values.get('DATAFORDELER_API_KEY', '').strip().strip('\"\'')
+    if not key and mcdk_cache.enabled():
+        return ''  # the MCDK cache adds its own key
     if not key or any(c.isspace() for c in key):
         raise ValueError('Set DATAFORDELER_API_KEY or use --credentials-file with a local .env file')
     return key
@@ -108,10 +111,21 @@ def graphql_messages(errors):
     return sorted({str(e.get('message') if isinstance(e, dict) else e)[:200] for e in errors})
 
 
+def graphql_url(endpoint, key):
+    """Datafordeler GraphQL for one register. With MCDK_CACHE_URL set, through the MCDK
+    cache (minecraftdanmark's geodata/mcdk-cache), which adds its own key; otherwise
+    straight to Datafordeler with `key`."""
+    url = f'https://graphql.datafordeler.dk/{endpoint}/v2'
+    if mcdk_cache.enabled():
+        return mcdk_cache.url(url)
+    return url + '?' + urlencode({'apiKey': key})
+
+
 def request_page(register, query, variables, key):
     # Never include the authenticated URL or raw HTTP exception in logs/errors.
     endpoint = 'DAR' if register == 'DAR_POINT' else register
-    url = f'https://graphql.datafordeler.dk/{endpoint}/v2?' + urlencode({'apiKey': key})
+    url = graphql_url(endpoint, key)
+    check = 'the MCDK cache and Datafordeler' if mcdk_cache.enabled() else 'Datafordeler access/service status'
     body = json.dumps({'query': query, 'variables': variables}).encode()
     for attempt in range(ATTEMPTS):
         retry = attempt < ATTEMPTS - 1
@@ -134,12 +148,12 @@ def request_page(register, query, variables, key):
             if error.code in (429, 500, 502, 503, 504) and retry:
                 time.sleep(2 ** attempt)
                 continue
-            raise ValueError(f'{register}: HTTP {error.code}; check Datafordeler access/service status') from None
+            raise ValueError(f'{register}: HTTP {error.code}; check {check}') from None
         except (URLError, TimeoutError):
             if retry:
                 time.sleep(2 ** attempt)
                 continue
-            raise ValueError(f'{register}: connection failed or timed out') from None
+            raise ValueError(f'{register}: connection failed or timed out; check {check}') from None
         except json.JSONDecodeError:
             raise ValueError(f'{register}: invalid JSON response') from None
 
@@ -218,7 +232,9 @@ def fetch(bbox, key, at=None, transport=request_page, progress=None, areas=None)
     `areas` replaces the building queries' rectangles with given EPSG:25832 WKT polygons
     of at most REQUEST_KM2 each, such as one tile of a local store."""
     bbox = bounds(','.join(map(str, bbox)), AREA_KM2)
-    at = at or datetime.now(timezone.utc)
+    # The MCDK cache keys a query on its body, `at` included: through the cache, the start of
+    # this UTC month, so the same question is answered from the cache all month.
+    at = at or (mcdk_cache.snapshot() if mcdk_cache.enabled() else datetime.now(timezone.utc))
     if at.tzinfo is None:
         raise ValueError('Snapshot time must have a timezone')
     def tile_rows(wkt):
@@ -307,7 +323,7 @@ def main():
         if args.hedges:
             from hedges import add, load_token
             token = load_token(args.credentials_file)
-            if not token:
+            if not token and not mcdk_cache.enabled():
                 print('Note: no DATAFORSYNINGEN_TOKEN; only hedges GeoDanmark types as living are added.')
             add(result, bbox, outlines, key, at, token, progress=progress)
         result['arnis_dk']['download'] = {'service': 'Datafordeler GraphQL v2', 'snapshot': snapshot.name}

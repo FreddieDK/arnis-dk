@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
@@ -275,6 +275,38 @@ class FetchTests(unittest.TestCase):
         self.assertEqual(opened.call_count, 1)
         self.assertIn('`nope` does not exist', str(caught.exception))
         self.assertNotIn('secret', str(caught.exception))
+
+    def test_through_the_mcdk_cache_no_key_is_sent(self):
+        sent = []
+
+        def opened(request, timeout):
+            sent.append(request.full_url)
+            return Response(page('BBR', []))
+        cache = {'MCDK_CACHE_URL': 'http://10.0.40.40/'}
+        with patch.dict(os.environ, cache), patch('fetch.urlopen', side_effect=opened):
+            os.environ.pop('DATAFORDELER_API_KEY', None)
+            request_page('BBR', '{}', {}, 'secret')
+            request_page('DAR_POINT', '{}', {}, '')
+            self.assertEqual(load_key(), '')
+        self.assertEqual(sent, ['http://10.0.40.40/graphql.datafordeler.dk/BBR/v2',
+                                'http://10.0.40.40/graphql.datafordeler.dk/DAR/v2'])
+        with patch.dict(os.environ), patch('fetch.urlopen', side_effect=opened):
+            os.environ.pop('MCDK_CACHE_URL', None)
+            request_page('BBR', '{}', {}, 'secret')
+        self.assertEqual(sent[-1], 'https://graphql.datafordeler.dk/BBR/v2?apiKey=secret')
+
+    def test_through_the_mcdk_cache_every_query_asks_for_the_start_of_the_month(self):
+        # The cache keys a query on its body; `at` = now would make every body new.
+        asked = []
+
+        def transport(register, query, variables, key):
+            asked.append(variables['at'])
+            return page(register, [])
+        with patch.dict(os.environ, {'MCDK_CACHE_URL': 'http://10.0.40.40'}):
+            *_, at = fetch(BBOX, '', transport=transport)
+        self.assertEqual((at.day, at.hour, at.minute, at.second, at.microsecond, at.utcoffset()),
+                         (1, 0, 0, 0, 0, timedelta(0)))
+        self.assertEqual(set(asked), {at.isoformat()})
 
     def test_failed_serialization_keeps_previous_output(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -117,6 +117,16 @@ class StoreTests(unittest.TestCase):
         written = json.loads((self.dir / 'out' / 'buildings.json').read_text(encoding='utf-8'))
         self.assertEqual(written['elements'], direct['elements'])
 
+    def test_through_the_mcdk_cache_a_tile_is_measured_without_keys_at_the_start_of_the_month(self):
+        with patch.dict(os.environ):
+            os.environ.pop('MCDK_CACHE_URL', None)
+            direct = store.fetch_tile('651_6150', 'key', 't', transport, opener)
+            os.environ['MCDK_CACHE_URL'] = 'http://10.0.40.40'
+            cached = store.fetch_tile('651_6150', '', None, transport, opener)
+        self.assertTrue(cached['height_model'])
+        self.assertEqual(cached['shares'], direct['shares'])
+        self.assertEqual(datetime.fromisoformat(cached['snapshot']), store.mcdk_cache.snapshot())
+
     def test_a_missing_tile_stops_assembly_unless_the_store_may_fetch_it(self):
         bbox = bbox_around(650900, 6150900, 651100, 6151100)
         with self.assertRaisesRegex(ValueError, 'lacks 2 of the 2 tiles'):

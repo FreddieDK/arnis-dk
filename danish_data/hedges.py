@@ -28,6 +28,7 @@ from shapely.strtree import STRtree
 from shapely.ops import transform, unary_union
 
 from fetch import counted, envelopes, request_page, unique
+import mcdk_cache
 from prepare import active
 
 HEDGE = 'Levende'
@@ -115,6 +116,12 @@ def read_float_tiff(raw):
     return np.frombuffer(data, dtype='<f4').reshape(height, width)
 
 
+def height_model(token, opener=None):
+    """The height model when it can be fetched, with a token or through the MCDK cache
+    (MCDK_CACHE_URL); None otherwise, and then only typed hedges are kept."""
+    return HeightModel(token, opener) if token or mcdk_cache.enabled() else None
+
+
 class HeightModel:
     """Growth above the terrain (surface minus terrain), fetched in tiles as needed."""
 
@@ -126,7 +133,10 @@ class HeightModel:
         self.size = TILE_PX * RESOLUTION_M
 
     def _open(self, params):
-        url = WCS + '?' + urlencode({**params, 'token': self.token})
+        if mcdk_cache.enabled():
+            url = mcdk_cache.url(WCS + '?' + urlencode(params))  # the cache adds its own token
+        else:
+            url = WCS + '?' + urlencode({**params, 'token': self.token})
         with urlopen(Request(url, headers={'User-Agent': 'Arnis-DK'}), timeout=120) as response:
             return response.read(64 * 1024 * 1024)
 
@@ -353,11 +363,11 @@ def add(supplement, bbox, building_rows, key, at, token=None, transport=request_
         rows[entity] += download(entity, entity_fields, wkt, at, key, transport)
     hedge_rows = unique(rows['GEODKV_Hegn'], 'GEODKV_Hegn')
     scrub_rows = unique(rows['GEODKV_KratBevoksning'], 'GEODKV_KratBevoksning')
-    heights = HeightModel(token, opener) if token else None
+    heights = height_model(token, opener)
     hedges, scrub, counts = select(hedge_rows, scrub_rows, building_rows, at, heights, progress)
     append_elements(supplement, hedges, scrub)
     meta = supplement['arnis_dk']
-    meta['hedges'] = {'height_model': bool(token), 'counts': counts}
-    if token:
+    meta['hedges'] = {'height_model': heights is not None, 'counts': counts}
+    if heights is not None:
         meta['attribution'] += '; Danmarks Højdemodel (Klimadatastyrelsen)'
     return counts

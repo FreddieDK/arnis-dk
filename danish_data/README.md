@@ -100,6 +100,30 @@ python danish_data/store.py supplement --store /srv/arnis-dk-store --bbox "55.67
 - A hedge crossing a tile border is measured in each tile with that tile's
   buildings; the newer measurement is used.
 
+## Through a shared cache
+
+`fetch.py`, `store.py` and the hedges' height model can go through the MCDK cache, a
+caching proxy for Datafordeler and Dataforsyningen that several servers share
+(`geodata/mcdk-cache` in the minecraftdanmark repository). It is off unless
+`MCDK_CACHE_URL` is set, for example `MCDK_CACHE_URL=http://10.0.40.40`.
+
+- **URLs:** GraphQL goes to `<cache>/graphql.datafordeler.dk/<register>/v2` and the
+  height model to `<cache>/api.dataforsyningen.dk/dhm_wcs_DAF`, without keys: the
+  cache adds its own. `DATAFORDELER_API_KEY` and `DATAFORSYNINGEN_TOKEN` may then be
+  left out, and untyped hedges are still measured.
+- **Snapshot:** the cache keys a GraphQL query on its body, the snapshot time included.
+  Through the cache, a download without a given time asks for the start of the current
+  UTC month instead of now, so the same tile asked for twice in a month is the same
+  question. Data is then up to a month old, as in a store refreshed monthly.
+- **Errors:** a cache that cannot be reached fails the download, as Datafordeler being
+  down does; there is no fallback to the services themselves.
+- **The helper:** `mcdk_cache.py` is a copy of the cache's Python client. Change it there
+  and copy it here, unchanged.
+
+Tried on 23 October 2026 with tile `540_6180` (960 buildings, 984 hedges) through a
+stand-in for the cache: the tile was the same as a direct download at the same
+snapshot, and all 48 GraphQL bodies were the same, so the cache answers a repeat.
+
 ## Import existing extracts
 
 `prepare.py` accepts Datafordeler Current JSON entity extracts. Each input must

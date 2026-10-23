@@ -1,6 +1,7 @@
 import argparse
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import struct
 import tempfile
@@ -243,6 +244,28 @@ class HedgeTests(unittest.TestCase):
             self.assertEqual(hedges.load_token(path), 't0ken')
             path.write_text('DATAFORDELER_API_KEY=a\n', encoding='utf-8')
             self.assertIsNone(hedges.load_token(path))
+
+    def test_through_the_mcdk_cache_the_height_model_needs_no_token(self):
+        class Body:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self, limit):
+                return b'tile'
+        opened = []
+        params = {'service': 'WCS', 'coverage': 'dhm_terraen', 'bbox': '1,2,3,4'}
+        with patch.dict(os.environ), patch('hedges.urlopen', side_effect=lambda r, timeout: opened.append(r.full_url) or Body()):
+            os.environ.pop('MCDK_CACHE_URL', None)
+            self.assertIsNone(hedges.height_model(None))
+            hedges.height_model('t0ken')._open(params)
+            os.environ['MCDK_CACHE_URL'] = 'http://10.0.40.40'
+            self.assertEqual(hedges.height_model(None)._open(params), b'tile')
+        self.assertEqual(opened, [
+            'https://api.dataforsyningen.dk/dhm_wcs_DAF?service=WCS&coverage=dhm_terraen&bbox=1%2C2%2C3%2C4&token=t0ken',
+            'http://10.0.40.40/api.dataforsyningen.dk/dhm_wcs_DAF?service=WCS&coverage=dhm_terraen&bbox=1%2C2%2C3%2C4'])
 
 
 class BridgeHedgeTests(unittest.TestCase):

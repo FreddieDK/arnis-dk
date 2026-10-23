@@ -33,6 +33,7 @@ from shapely.geometry import box
 from fetch import AREA_KM2, atomic_json, bounds, fetch, load_key, progress_printer, request_page
 from prepare import identity, prepare
 import hedges
+import mcdk_cache
 
 SCHEMA = 'arnis-dk.store/1'
 # 9 km², under fetch.REQUEST_KM2, so one tile is one geometry query.
@@ -91,8 +92,8 @@ def fetch_tile(key, api_key, token=None, transport=request_page, opener=None):
     outlines, bbr, dar, at = fetch([south, west, north, east], api_key, None, transport, areas=[wkt])
     hedge_rows = hedges.download('GEODKV_Hegn', FIELDS + ' hegnstype', wkt, at, api_key, transport)
     scrub_rows = hedges.download('GEODKV_KratBevoksning', FIELDS, wkt, at, api_key, transport)
-    heights = hedges.HeightModel(token, opener) if token else None
-    return {'schema': SCHEMA, 'tile': key, 'snapshot': at.isoformat(), 'height_model': bool(token),
+    heights = hedges.height_model(token, opener)
+    return {'schema': SCHEMA, 'tile': key, 'snapshot': at.isoformat(), 'height_model': heights is not None,
             'geodanmark': outlines, 'bbr': bbr, 'dar': dar, 'hedges': hedge_rows, 'scrub': scrub_rows,
             'shares': hedges.measure(hedge_rows, outlines, at, heights)}
 
@@ -224,7 +225,7 @@ def main():
 
     def credentials():
         token = hedges.load_token(args.credentials_file)
-        if not token:
+        if not token and not mcdk_cache.enabled():
             print('Note: no DATAFORSYNINGEN_TOKEN; only hedges GeoDanmark types as living are added.')
         return load_key(args.credentials_file), token
     try:
