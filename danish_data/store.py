@@ -13,7 +13,9 @@ the tiles under it, offline: seconds instead of minutes.
 `--older-than DAYS` to fetch old tiles again. `supplement --fetch-missing` fetches and
 keeps the tiles a bbox lacks, so a store can also fill itself as maps are made.
 `refresh --store DIR --older-than DAYS` fetches again the tiles the store holds that are
-older, and no others, so a store that fills itself keeps its size.
+older, and no others, so a store that fills itself keeps its size. `supplement` notes
+which tiles a map used, and `prune --store DIR --unused-for DAYS` deletes the tiles no map
+has used for that long, so such a store also forgets what is no longer used.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -130,6 +132,42 @@ def stored_keys(store):
     return sorted(path.name[:-len('.json.gz')] for path in (Path(store) / 'tiles').glob('*/*.json.gz'))
 
 
+def used_path(store, key):
+    return Path(store) / 'used' / key
+
+
+def mark_used(store, keys, now=None):
+    """Notes that a map used these tiles: an empty file per tile, its time the last use."""
+    for key in keys:
+        path = used_path(store, key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+        if now is not None:
+            os.utime(path, (now, now))
+
+
+def prune(store, unused_for=timedelta(days=90), now=None):
+    """Deletes the tiles no map has used for `unused_for`, so a store that fills itself as
+    maps are made keeps what they use, and refresh() fetches only that again. A tile
+    without a mark yet (fetched before marks, or by build) counts as used now: it is marked
+    and goes once it has been unused that long. Returns the deleted keys."""
+    now = time.time() if now is None else now
+    cutoff = now - unused_for.total_seconds()
+    removed = []
+    for key in stored_keys(store):
+        mark = used_path(store, key)
+        try:
+            last = mark.stat().st_mtime
+        except FileNotFoundError:
+            mark_used(store, [key], now)
+            continue
+        if last < cutoff:
+            tile_path(store, key).unlink(missing_ok=True)
+            mark.unlink(missing_ok=True)
+            removed.append(key)
+    return removed
+
+
 def refresh(store, api_key, token=None, older_than=timedelta(days=30), workers=2, progress=None,
             transport=request_page, opener=None, log=print):
     """Fetches again the tiles the store holds that are older than `older_than`. A tile is
@@ -144,6 +182,8 @@ def supplement(store, bbox, output, fetch_missing=None, workers=4, progress=None
     `output`. `fetch_missing`, a function returning (api_key, token), lets the store fetch
     and keep the tiles it lacks; without it a missing tile is an error."""
     keys = tile_keys(bbox)
+    # Marked before anything is read, so a prune running meanwhile keeps these tiles.
+    mark_used(store, keys)
     missing = [key for key in keys if not tile_path(store, key).exists()]
     if missing:
         if fetch_missing is None:
@@ -217,6 +257,9 @@ def main():
     assemble_args.add_argument('--output', required=True, type=Path)
     assemble_args.add_argument('--fetch-missing', action='store_true', help='Fetch and keep tiles the store lacks')
     assemble_args.add_argument('--workers', type=int, default=4)
+    prune_args = commands.add_parser('prune', help='Delete the tiles no map has used for DAYS')
+    prune_args.add_argument('--unused-for', type=float, metavar='DAYS', required=True)
+    prune_args.add_argument('--store', required=True, type=Path)
     for command in (build_args, refresh_args, assemble_args):
         command.add_argument('--store', required=True, type=Path)
         command.add_argument('--credentials-file', type=Path,
@@ -244,6 +287,10 @@ def main():
             print(f'{held} tiles in the store; fetched {len(todo) - len(failed)} again, {len(failed)} failed.')
             if failed:
                 parser.exit(1, 'The failed tiles keep their older version; refresh again to retry them.\n')
+        elif args.command == 'prune':
+            held = len(stored_keys(args.store))
+            removed = prune(args.store, timedelta(days=args.unused_for))
+            print(f'{held} tiles in the store; deleted {len(removed)} no map has used for {args.unused_for:g} days.')
         else:
             result = supplement(args.store, bounds(args.bbox, AREA_KM2), args.output,
                                 credentials if args.fetch_missing else None, args.workers, progress_printer())

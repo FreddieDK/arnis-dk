@@ -188,6 +188,34 @@ class StoreTests(unittest.TestCase):
         self.assertFalse(store.tile_path(self.dir / 'store', absent).exists())
         self.assertGreater(store.tile_path(self.dir / 'store', stored).stat().st_mtime, old + 86400)
 
+    def test_prune_forgets_the_tiles_no_map_has_used_lately(self):
+        root = self.dir / 'store'
+        used_bbox = bbox_around(650900, 6150900, 650950, 6150950)
+        used, = store.tile_keys(used_bbox)
+        other = '654_6150'
+        store.build(root, [used, other], 'key', transport=transport)
+        # Tiles from before marks, or from build, count as used now and are kept.
+        self.assertEqual(store.prune(root), [])
+        self.assertTrue(store.used_path(root, other).exists())
+        # A map marks its tiles; the other is not used for 100 days.
+        later = time.time() + 100 * 86400
+        store.mark_used(root, [used], later)
+        self.assertEqual(store.prune(root, timedelta(days=90), now=later), [other])
+        self.assertEqual(store.stored_keys(root), [used])
+        self.assertFalse(store.used_path(root, other).exists())
+        # refresh() then fetches only what maps still use.
+        old = time.time() - 40 * 86400
+        os.utime(store.tile_path(root, used), (old, old))
+        self.assertEqual(store.refresh(root, 'key', older_than=timedelta(days=25), transport=transport), ([used], []))
+
+    def test_a_map_marks_the_tiles_it_used(self):
+        root = self.dir / 'store'
+        bbox = bbox_around(650900, 6150900, 651100, 6151100)
+        before = time.time() - 1
+        store.supplement(root, bbox, self.dir / 'out.json', lambda: ('key', None), transport=transport)
+        for key in store.tile_keys(bbox):
+            self.assertGreaterEqual(store.used_path(root, key).stat().st_mtime, before)
+
     def test_a_failing_tile_is_reported_and_the_others_are_kept(self):
         keys = store.tile_keys(bbox_around(650900, 6150900, 651100, 6151100))
         bad = sorted(keys)[0]

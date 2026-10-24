@@ -95,6 +95,12 @@ python danish_data/store.py supplement --store /srv/arnis-dk-store --bbox "55.67
   that are older, and no others, so a store that fills itself keeps its size. A
   tile is replaced only once its new version is complete; a failed one keeps its
   older version. Run monthly with `--older-than 25`, for example from a timer.
+- `supplement` notes which tiles each map used (an empty file per tile under
+  `<store>/used/`). `prune --store DIR --unused-for DAYS` deletes the tiles no map has
+  used for that long, so a store that fills itself as maps are made keeps what they
+  use, and a refresh fetches only that. A tile without a note yet, from `build` or
+  from before notes, counts as used when `prune` first sees it. Run it before the
+  monthly refresh, for example with `--unused-for 90`.
 - A town tile is about 0.5 MB, a rural tile far less; Denmark is estimated at
   1.5–2 GB. Keys come from `--credentials-file` or the environment, as for `fetch.py`.
 - A hedge crossing a tile border is measured in each tile with that tile's
