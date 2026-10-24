@@ -444,8 +444,6 @@ class Photo:
             return None
 
     def _view(self, bounds, zmin, zmax, pad):
-        from rasterio.windows import Window
-
         x0, y0, x1, y1 = bounds
         gx, gy, gz = np.meshgrid([x0, x1], [y0, y1], [zmin, zmax])
         c, r = self.project(gx.ravel(), gy.ravel(), gz.ravel())
@@ -456,7 +454,11 @@ class Photo:
         if c1 - c0 < 4 or r1 - r0 < 4:
             return None
         lo, hi = self.levels()
-        data = read_retrying(open_photo(self.url), window=Window(c0, r0, c1 - c0, r1 - r0))
+        source = open_photo(self.url)
+        # Imported after open_photo, which needs rasterio itself: without it, as in CI, a
+        # photo that cannot be opened is still the error that is logged.
+        from rasterio.windows import Window
+        data = read_retrying(source, window=Window(c0, r0, c1 - c0, r1 - r0))
         image = np.clip((np.moveaxis(data, 0, -1).astype(np.float32) - lo)
                         / np.maximum(hi - lo, 1.0) * 255.0, 0, 255)
         return PhotoView(self, image, (c0, r0))
